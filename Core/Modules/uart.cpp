@@ -1,3 +1,5 @@
+
+//hi
 #include "uart.hpp"
 //huart的引脚和灯暂定
 extern "C"{
