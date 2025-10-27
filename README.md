@@ -1,5 +1,5 @@
 # RM2026-Internal-Template
-This is the template project for RM2026 Internal competition.
+This is the template project for RM2026 Internal competition, made for vision(this edit is for tutorial purpose).
 
 ## Quick start guide
 
