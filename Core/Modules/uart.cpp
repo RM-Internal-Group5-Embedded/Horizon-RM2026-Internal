@@ -1,184 +1,203 @@
 #include "uart.hpp"
 //huart的引脚和灯暂定
-extern "C"{
-    namespace uartdriver
+
+namespace uartdriver
+{
+    //记录看门狗
+    Uart::Uart() : dma_resetting_(0), invalid_data_count_(0), last_time_(0), time_diff_(0) 
     {
-        //记录看门狗
-        uart::uart() : dma_resetting(0), invalid_data_count(0), last_time(0), time_diff(0) 
-        {
-            uart_watchdog.last_receive_tick = 0;
-            uart_watchdog.timeout_ms = UART_WATCHDOG_TIMEOUT_MS;
-            uart_watchdog.is_triggered = 0;
+        uart_heartbeat_.last_receive_tick = 0;
+        uart_heartbeat_.timeout_ms = UART_HEARTBEAT_TIMEOUT_MS;
+        uart_heartbeat_.is_triggered = 0;
+    }
+
+    void Uart::init() 
+    {
+        // 初始化心跳检测
+        uart_heartbeat_.last_receive_tick = xTaskGetTickCount(); // 使用FreeRTOS tick
+        uart_heartbeat_.is_triggered = 0;
+
+        // 检查UART句柄是否有效
+        if (huart3.Instance == NULL) {
+            // UART未初始化，直接返回
+            return;
         }
 
-        void uart::Init() 
-        {
-            
-            uart_watchdog.last_receive_tick = xTaskGetTickCount(); // 使用FreeRTOS tick
-            uart_watchdog.is_triggered = 0;
 
-            // 注册回调
-            HAL_UART_RegisterRxEventCallback(&huart1, StaticRxEventCallback);
+        // 注册回调
+        HAL_UART_RegisterRxEventCallback(&huart3, StaticRxEventCallback);
 
-            // 启动DMA接收
-            HAL_UARTEx_ReceiveToIdle_DMA(&huart1, (uint8_t *)&received_bit_value, sizeof(received_bit_value));
-            __HAL_DMA_DISABLE_IT(huart1.hdmarx, DMA_IT_HT);
+        // 启动DMA接收 - 添加错误检查
+        HAL_StatusTypeDef status = HAL_UARTEx_ReceiveToIdle_DMA(&huart3, (uint8_t *)&received_bit_value_, sizeof(received_bit_value_));
+        if (status != HAL_OK) {
+            // DMA启动失败，尝试重新启动
+            HAL_UART_AbortReceive(&huart3);
+            status = HAL_UARTEx_ReceiveToIdle_DMA(&huart3, (uint8_t *)&received_bit_value_, sizeof(received_bit_value_));
         }
-
-        void uart::FeedWatchdog() //喂狗
-        {
-            uart_watchdog.last_receive_tick = xTaskGetTickCount();
-            uart_watchdog.is_triggered = 0;
-            HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);  // 使用已定义的LED
+        
+        if (huart3.hdmarx != NULL) {
+            __HAL_DMA_DISABLE_IT(huart3.hdmarx, DMA_IT_HT);
         }
+    }
 
-        void uart::CheckWatchdog() //检测狗，（这个需要被扔到loop里反复检测）
-        {
-            if (xTaskGetTickCount() - uart_watchdog.last_receive_tick >= pdMS_TO_TICKS(uart_watchdog.timeout_ms)) {
-                if (!uart_watchdog.is_triggered)
-                {
-                    uart_watchdog.is_triggered = 1;
-                    TriggerWatchdog();
-                    ResetDMA();
-                }
-            }
-        }
+    void Uart::feedHeartbeat() //喂心跳
+    {
+        uart_heartbeat_.last_receive_tick = xTaskGetTickCount();
+        uart_heartbeat_.is_triggered = 0;
+        HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);  // 使用已定义的LED
+    }
 
-        uint8_t uart::validate_number() //检测接收数据大小有效性
-        {
-            if (received_bit_value.channel_1 >= 240 && received_bit_value.channel_1 <= 1807 &&
-                received_bit_value.channel_2 >= 240 && received_bit_value.channel_2 <= 1807 &&
-                received_bit_value.channel_3 >= 240 && received_bit_value.channel_3 <= 1807 &&
-                received_bit_value.channel_4 >= 240 && received_bit_value.channel_4 <= 1807 &&
-                received_bit_value.channel_5 >= 240 && received_bit_value.channel_5 <= 1807 &&
-                received_bit_value.channel_6 >= 240 && received_bit_value.channel_6 <= 1807 &&
-                received_bit_value.channel_7 >= 240 && received_bit_value.channel_7 <= 1807 &&
-                received_bit_value.channel_8 >= 240 && received_bit_value.channel_8 <= 1807 &&
-                received_bit_value.channel_9 >= 240 && received_bit_value.channel_9 <= 1807 &&
-                received_bit_value.channel_10 >= 240 && received_bit_value.channel_10 <= 1807 &&
-                received_bit_value.channel_11 >= 240 && received_bit_value.channel_11 <= 1807 &&
-                received_bit_value.channel_12 >= 240 && received_bit_value.channel_12 <= 1807 &&
-                received_bit_value.channel_13 >= 240 && received_bit_value.channel_13 <= 1807 &&
-                received_bit_value.channel_14 >= 240 && received_bit_value.channel_14 <= 1807 &&
-                received_bit_value.channel_15 >= 240 && received_bit_value.channel_15 <= 1807 &&
-                received_bit_value.channel_16 >= 240 && received_bit_value.channel_16 <= 1807) {
-                return 1;
-            }
-            return 0;
-        }
-
-        void uart::TriggerWatchdog() //触发看门狗
-        {
-            received_value.header = 15;
-            received_value.channel_1 = 1024;
-            received_value.channel_2 = 1024;
-            received_value.channel_3 = 1024;
-            received_value.channel_4 = 1024;
-            received_value.channel_5 = 1024;
-            received_value.channel_6 = 1024;
-            received_value.channel_7 = 240;
-            received_value.channel_8 = 240;
-            received_value.channel_9 = 240;
-            received_value.channel_10 = 240;
-            received_value.channel_11 = 1024;
-            received_value.channel_12 = 1024;
-            received_value.channel_13 = 1024;
-            received_value.channel_14 = 1024;
-            received_value.channel_15 = 1024;
-            received_value.channel_16 = 1024;
-            received_value.channel_17 = 0;
-            received_value.channel_18 = 0;
-            received_value.frame_lost = 0;
-            received_value.fail_act = 0;
-            received_value.footer = 0;
-
-            HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);  // 使用已定义的LED
-        }
-
-        void uart::ResetDMA() //重置DMA
-        {
-            if (!dma_resetting) {
-                dma_resetting = 1;
-                HAL_UART_AbortReceive(&huart1);
-                HAL_UARTEx_ReceiveToIdle_DMA(&huart1, (uint8_t *)&received_bit_value, sizeof(received_bit_value));
-                __HAL_DMA_DISABLE_IT(huart1.hdmarx, DMA_IT_HT);
-                dma_resetting = 0;
-            }
-        }
-
-        void uart::RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size) //回调函数
-        {
-            if (huart == &huart1) 
+    void Uart::checkHeartbeat() //检测心跳，（这个需要被扔到loop里反复检测）
+    {
+        if (xTaskGetTickCount() - uart_heartbeat_.last_receive_tick >= pdMS_TO_TICKS(uart_heartbeat_.timeout_ms)) {
+            if (!uart_heartbeat_.is_triggered)
             {
-                // 首先检查接收到的数据长度
-                if (Size != sizeof(received_bit_value)) 
-                {
-                    // 重新启动接收
-                    HAL_UARTEx_ReceiveToIdle_DMA(&huart1, (uint8_t *)&received_bit_value, sizeof(received_bit_value));
-                    __HAL_DMA_DISABLE_IT(huart1.hdmarx, DMA_IT_HT);
-                    return;
+                uart_heartbeat_.is_triggered = 1;
+                triggerHeartbeat();
+                resetDma();
+            }
+        }
+    }
+
+    uint8_t Uart::validateNumber() //检测接收数据大小有效性
+    {
+        if (received_bit_value_.channel_1 >= 240 && received_bit_value_.channel_1 <= 1807 &&
+            received_bit_value_.channel_2 >= 240 && received_bit_value_.channel_2 <= 1807 &&
+            received_bit_value_.channel_3 >= 240 && received_bit_value_.channel_3 <= 1807 &&
+            received_bit_value_.channel_4 >= 240 && received_bit_value_.channel_4 <= 1807 &&
+            received_bit_value_.channel_5 >= 240 && received_bit_value_.channel_5 <= 1807 &&
+            received_bit_value_.channel_6 >= 240 && received_bit_value_.channel_6 <= 1807 &&
+            received_bit_value_.channel_7 >= 240 && received_bit_value_.channel_7 <= 1807 &&
+            received_bit_value_.channel_8 >= 240 && received_bit_value_.channel_8 <= 1807 &&
+            received_bit_value_.channel_9 >= 240 && received_bit_value_.channel_9 <= 1807 &&
+            received_bit_value_.channel_10 >= 240 && received_bit_value_.channel_10 <= 1807 &&
+            received_bit_value_.channel_11 >= 240 && received_bit_value_.channel_11 <= 1807 &&
+            received_bit_value_.channel_12 >= 240 && received_bit_value_.channel_12 <= 1807 &&
+            received_bit_value_.channel_13 >= 240 && received_bit_value_.channel_13 <= 1807 &&
+            received_bit_value_.channel_14 >= 240 && received_bit_value_.channel_14 <= 1807 &&
+            received_bit_value_.channel_15 >= 240 && received_bit_value_.channel_15 <= 1807 &&
+            received_bit_value_.channel_16 >= 240 && received_bit_value_.channel_16 <= 1807) {
+            return 1;
+        }
+        return 0;
+    }
+
+    void Uart::triggerHeartbeat() //触发心跳
+    {
+        received_value_.header = 15;
+        received_value_.channel_1 = 1024;
+        received_value_.channel_2 = 1024;
+        received_value_.channel_3 = 1024;
+        received_value_.channel_4 = 1024;
+        received_value_.channel_5 = 1024;
+        received_value_.channel_6 = 1024;
+        received_value_.channel_7 = 240;
+        received_value_.channel_8 = 240;
+        received_value_.channel_9 = 240;
+        received_value_.channel_10 = 240;
+        received_value_.channel_11 = 1024;
+        received_value_.channel_12 = 1024;
+        received_value_.channel_13 = 1024;
+        received_value_.channel_14 = 1024;
+        received_value_.channel_15 = 1024;
+        received_value_.channel_16 = 1024;
+        received_value_.channel_17 = 0;
+        received_value_.channel_18 = 0;
+        received_value_.frame_lost = 0;
+        received_value_.fail_act = 0;
+        received_value_.footer = 0;
+
+        HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);  // 使用已定义的LED
+    }
+
+    void Uart::resetDma() //重置DMA
+    {
+        if (!dma_resetting_) {
+            dma_resetting_ = 1;
+            HAL_UART_AbortReceive(&huart3);
+            HAL_UARTEx_ReceiveToIdle_DMA(&huart3, (uint8_t *)&received_bit_value_, sizeof(received_bit_value_));
+            __HAL_DMA_DISABLE_IT(huart3.hdmarx, DMA_IT_HT);
+            dma_resetting_ = 0;
+        }
+    }
+
+    void Uart::rxEventCallback(UART_HandleTypeDef* _huart, uint16_t _size) //回调函数
+    {
+        if (_huart == &huart3) 
+        {
+            // 首先检查接收到的数据长度
+            if (_size != sizeof(received_bit_value_)) 
+            {
+                // 重新启动接收
+                if (huart3.hdmarx != NULL) {
+                    HAL_UARTEx_ReceiveToIdle_DMA(&huart3, (uint8_t *)&received_bit_value_, sizeof(received_bit_value_));
+                    __HAL_DMA_DISABLE_IT(huart3.hdmarx, DMA_IT_HT);
                 }
-                
-                if (received_bit_value.header == 0x0F && received_bit_value.footer == 0x00) 
+                return;
+            }
+            
+            if (received_bit_value_.header == 0x0F && received_bit_value_.footer == 0x00) 
+            {
+                if (validateNumber()) 
                 {
-                    if (validate_number()) 
+                    feedHeartbeat();
+                    invalid_data_count_ = 0;
+                    if (received_bit_value_.fail_act == 1)
                     {
-                        FeedWatchdog();
-                        invalid_data_count = 0;
-                        if (received_bit_value.fail_act == 1)
-                        {
-                            TriggerWatchdog();
-                        } 
-                        else 
-                        {
-                            received_value.header = received_bit_value.header;
-                            received_value.channel_1 = received_bit_value.channel_1;
-                            received_value.channel_2 = received_bit_value.channel_2;
-                            received_value.channel_3 = received_bit_value.channel_3;
-                            received_value.channel_4 = received_bit_value.channel_4;
-                            received_value.channel_5 = received_bit_value.channel_5;
-                            received_value.channel_6 = received_bit_value.channel_6;
-                            received_value.channel_7 = received_bit_value.channel_7;
-                            received_value.channel_8 = received_bit_value.channel_8;
-                            received_value.channel_9 = received_bit_value.channel_9;
-                            received_value.channel_10 = received_bit_value.channel_10;
-                            received_value.channel_11 = received_bit_value.channel_11;
-                            received_value.channel_12 = received_bit_value.channel_12;
-                            received_value.channel_13 = received_bit_value.channel_13;
-                            received_value.channel_14 = received_bit_value.channel_14;
-                            received_value.channel_15 = received_bit_value.channel_15;
-                            received_value.channel_16 = received_bit_value.channel_16;
-                            received_value.channel_17 = received_bit_value.channel_17;
-                            received_value.channel_18 = received_bit_value.channel_18;
-                            received_value.frame_lost = received_bit_value.frame_lost;
-                            received_value.fail_act = received_bit_value.fail_act;
-                            received_value.footer = received_bit_value.footer;
-                        }
+                        triggerHeartbeat();
                     } 
                     else 
                     {
-                        invalid_data_count++;
-                        if (invalid_data_count >= 3)//失败数据大于三次就重置DMA
-                        {
-                            ResetDMA();
-                            invalid_data_count = 0;
-                        }
+                        received_value_.header = received_bit_value_.header;
+                        received_value_.channel_1 = received_bit_value_.channel_1;
+                        received_value_.channel_2 = received_bit_value_.channel_2;
+                        received_value_.channel_3 = received_bit_value_.channel_3;
+                        received_value_.channel_4 = received_bit_value_.channel_4;
+                        received_value_.channel_5 = received_bit_value_.channel_5;
+                        received_value_.channel_6 = received_bit_value_.channel_6;
+                        received_value_.channel_7 = received_bit_value_.channel_7;
+                        received_value_.channel_8 = received_bit_value_.channel_8;
+                        received_value_.channel_9 = received_bit_value_.channel_9;
+                        received_value_.channel_10 = received_bit_value_.channel_10;
+                        received_value_.channel_11 = received_bit_value_.channel_11;
+                        received_value_.channel_12 = received_bit_value_.channel_12;
+                        received_value_.channel_13 = received_bit_value_.channel_13;
+                        received_value_.channel_14 = received_bit_value_.channel_14;
+                        received_value_.channel_15 = received_bit_value_.channel_15;
+                        received_value_.channel_16 = received_bit_value_.channel_16;
+                        received_value_.channel_17 = received_bit_value_.channel_17;
+                        received_value_.channel_18 = received_bit_value_.channel_18;
+                        received_value_.frame_lost = received_bit_value_.frame_lost;
+                        received_value_.fail_act = received_bit_value_.fail_act;
+                        received_value_.footer = received_bit_value_.footer;
                     }
-
-                    uint32_t current_time = xTaskGetTickCount();
-                    time_diff = current_time - last_time;
-                    last_time = current_time;
-                    HAL_UARTEx_ReceiveToIdle_DMA(&huart1, (uint8_t *)&received_bit_value, sizeof(received_bit_value));
-                    __HAL_DMA_DISABLE_IT(huart1.hdmarx, DMA_IT_HT);
-
+                } 
+                else 
+                {
+                    invalid_data_count_++;
+                    if (invalid_data_count_ >= 3)//失败数据大于三次就重置DMA
+                    {
+                        resetDma();
+                        invalid_data_count_ = 0;
+                    }
                 }
+
+                uint32_t current_time = xTaskGetTickCount();
+                time_diff_ = current_time - last_time_;
+                last_time_ = current_time;
+                if (huart3.hdmarx != NULL) {
+                    HAL_UARTEx_ReceiveToIdle_DMA(&huart3, (uint8_t *)&received_bit_value_, sizeof(received_bit_value_));
+                    __HAL_DMA_DISABLE_IT(huart3.hdmarx, DMA_IT_HT);
+                }
+
             }
         }
-        
-        void uart::StaticRxEventCallback(UART_HandleTypeDef *huart, uint16_t Size) 
-        {
-            extern uartdriver::uart g_uart;
-            g_uart.RxEventCallback(huart, Size);
-        }
     }
+}
+
+// 桥接函数定义（在命名空间外，C风格）
+extern "C" void StaticRxEventCallback(UART_HandleTypeDef* huart, uint16_t size) 
+{
+    extern uartdriver::Uart g_uart;
+    g_uart.rxEventCallback(huart, size);
 }
