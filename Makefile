@@ -87,7 +87,8 @@ Core/Src/dma.c
 
 
 CPP_SOURCES  = \
-$(wildcard Core/Src/*.cpp)
+$(wildcard Core/Src/*.cpp) \
+$(wildcard Core/Modules/*.cpp)
 
 # ASM sources
 ASM_SOURCES =  \
@@ -111,6 +112,7 @@ AS_INCLUDES =
 # C includes
 C_INCLUDES =  \
 -ICore/Inc \
+-ICore/Modules \
 -IDrivers/STM32G4xx_HAL_Driver/Inc \
 -IDrivers/STM32G4xx_HAL_Driver/Inc/Legacy \
 -IDrivers/CMSIS/Device/ST/STM32G4xx/Include \

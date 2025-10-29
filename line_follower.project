@@ -1,0 +1,210 @@
+This file explains the line follower feature of the AR robot.
+
+---
+
+# Overall goal
+Starting from start zone and loaded with two cargos, move the cargos into the identified slots and back to the starting zone. 
+
+---
+
+# Field
+/-------------\
+|             |
+| start zone  |
+|             |
+\-------------/
+       |
+       |
+       |
+       |
+       |------- slot 1
+       |
+       |
+       |------- slot 2 
+       |
+       |
+       |------- slot 3
+       |
+       |
+       \------- slot 4
+
+---
+
+# Problem step by step
+1. Identify the which slot the block is placed (Through off-robot vision site, only tells which slot has block, but not robot's position)
+2. Move the robot from the starting zone to the position of the slot that has the block
+3. Release the cargo into the block
+4. Return to the starting zone for loading cargo
+
+---
+
+# What to be solved by the line follower
+1. Localization of the robot: follow the line + slot pos detection
+2. Move robot forward until desired slot position is reached
+3. After dropping the cargo, return to the starting zone for loading. 
+
+---
+
+# Existing features/features that will be implemented by other people
+## Embedded feature:
+- Full pid control for the two its wheel + balancing algorithm.
+- Vision detection for block location, wireless communication send its info to robot.
+
+## Mechanical feature:
+- Two wheel (two wheels facing each other) robot with self balancing.
+- Dropping mechanism and loading mechanism that only require the robot to the align with the horizontal position of the slot and vertically have its the center on the line.
+
+## Hardware features:
+- Four Digital IR sensors will be placed on the bottom of the robot.
+- Full access to IMU: MPU6500
+- IR sensor positioning: [S] <--~40mm--> [L][M][R] ([M] positioned in the center of the line, sensor group positioned along the line between the two wheels)
+  * SLOT (S): Slot detection only (~40mm left of L)
+  * LEFT (L): Line following - left deviation detection
+  * MIDDLE (M): Line following - center detection (at robot centerline)
+  * RIGHT (R): Line following - right deviation detection
+  * L-M-R spacing: evenly spaced 10-15mm apart
+  * Line width dependent: total L-M-R span should be ~1.5-2× line width
+
+---
+
+# Features to be implemented (Embedded)
+## 1. Basic line following algorithm (current priority)
+- Function: `void followLine(uint8_t L, uint8_t M, uint8_t R)`
+- Function: `void updateMotorSpeed(int16_t leftSpeed, int16_t rightSpeed)` // Interface to motor controller
+
+## 2. Slot detection and localization
+- Function: `void detectSlot(uint8_t S)`
+- Function: `uint8_t getCurrentSlotPosition()` // Returns slot number 0-4
+- Function: `bool isAtTargetSlot(uint8_t targetSlot)`
+
+## 3. High-level state machine
+- TODO: Define states (IDLE, FOLLOWING, AT_SLOT, RETURNING, etc.)
+- TODO: Implement state transitions
+
+---
+
+# Sensor state table for line following:
+  * L=0, M=1, R=0: Centered (go straight)
+  * L=1, M=1, R=0: Drift left (turn right)
+  * L=0, M=1, R=1: Drift right (turn left)
+  * L=1, M=0, R=0: Far left (sharp right)
+  * L=0, M=0, R=1: Far right (sharp left)
+  * L=0, M=0, R=0: Line lost (stop/search)
+  * S=1: Slot detected (count and check if target)
+
+---
+
+# Code Specification
+1. 使用class,namespace等面向对象编程编程方式(OOP)运行相应模块代码
+2. 建议使用 Google C++ Style 进行命名:
+       -  variables: snake_case
+       - function: smallCamelCase
+       - class/struct: PascalCase
+       - member variables: 变量名后下划线_
+       - param variables: _变量名前下划线
+
+---
+
+# Placeholders to be replaced
+
+## 1. GPIO Pin Configuration (Core/Src/UserTask.cpp, line ~24-29)
+**Current placeholder pins:**
+```cpp
+LineFollower::SensorPins line_follower_pins = {
+    GPIOB, GPIO_PIN_12,  // Slot sensor (placeholder: LED1)
+    GPIOB, GPIO_PIN_13,  // Left sensor (placeholder: LED2)
+    GPIOC, GPIO_PIN_13,  // Middle sensor (placeholder: BTN_0)
+    GPIOC, GPIO_PIN_14   // Right sensor (placeholder: BTN_1)
+};
+```
+
+**Action required:**
+- Configure actual IR sensor GPIO pins in STM32CubeMX
+- Update the pin assignments in UserTask.cpp:
+  - slot_port_ and slot_pin_ → Actual slot detection sensor pin
+  - left_port_ and left_pin_ → Actual left IR sensor pin
+  - middle_port_ and middle_pin_ → Actual middle IR sensor pin
+  - right_port_ and right_pin_ → Actual right IR sensor pin
+
+**Example replacement:**
+```cpp
+LineFollower::SensorPins line_follower_pins = {
+    GPIOA, GPIO_PIN_0,   // Slot sensor
+    GPIOA, GPIO_PIN_1,   // Left sensor
+    GPIOA, GPIO_PIN_2,   // Middle sensor
+    GPIOA, GPIO_PIN_3    // Right sensor
+};
+```
+
+## 2. Motor Control Interface (Core/Src/UserTask.cpp, line ~85-89)
+**Current placeholder:**
+```cpp
+LineFollower::MotorCommand cmd = g_line_follower.getMotorCommand();
+(void)cmd;  // Suppress unused variable warning until motor interface is implemented
+
+// TODO: 调用实际的电机控制接口
+// motor_controller.setSpeed(cmd.left_speed, cmd.right_speed);
+```
+
+**Action required:**
+- Implement or integrate with existing wheel PID controller
+- Replace the TODO comment with actual motor control function call
+- cmd.left_speed and cmd.right_speed range: -1024 to 1024
+- 0 = stop, 1024 = full speed forward
+
+**Example replacement:**
+```cpp
+LineFollower::MotorCommand cmd = g_line_follower.getMotorCommand();
+// Call actual motor controller (example interface)
+motor_controller.setLeftSpeed(cmd.left_speed);
+motor_controller.setRightSpeed(cmd.right_speed);
+// OR if using differential drive:
+// motor_controller.setDifferentialSpeed(cmd.left_speed, cmd.right_speed);
+```
+
+
+## 3. Target Slot from Vision System (Not yet implemented)
+**Current status:** 
+- Line follower reads sensors and follows line
+- Slot detection sensor (S) is read but not used for logic
+- No integration with vision system for target slot number
+
+**Action required when implementing slot detection (Feature #2):**
+- Get target slot number from vision UART module
+- Implement slot counting in LineFollowerController
+- Stop at target slot when S sensor detects junction
+- Suggested interface in LineFollowerController:
+  ```cpp
+  void setTargetSlot(uint8_t _target_slot);  // 1-4
+  bool isAtTargetSlot();  // Check if arrived
+  ```
+
+
+## 4. Calibration Constants (Core/Modules/line_follower.hpp, line ~79-81)
+**Current values (may need tuning):**
+```cpp
+constexpr int16_t NOMINAL_SPEED = 1024;           // Base speed
+constexpr float GENTLE_TURN_RATIO = 0.7f;         // Gentle turn reduction
+constexpr float SHARP_TURN_RATIO = 0.3f;          // Sharp turn reduction
+constexpr uint32_t LINE_FOLLOWER_UPDATE_RATE_MS = 20;  // 50Hz
+```
+
+**Action required:**
+- Test on actual robot and tune these values for:
+  - Optimal speed without losing line
+  - Smooth vs. responsive turning
+  - Update rate based on sensor sampling and motor response time
+
+
+## 5. Sensor Polarity (Core/Modules/line_follower.cpp, line ~54-58)
+**Current assumption:**
+- GPIO_PIN_SET (HIGH) = line detected (dark line)
+- GPIO_PIN_RESET (LOW) = no line (light surface)
+
+**Action required if sensor logic is inverted:**
+- Test actual IR sensor output when over black line
+- If inverted, change line 56-59 in line_follower.cpp:
+  ```cpp
+  // If HIGH = no line, LOW = line detected:
+  readings.left = (HAL_GPIO_ReadPin(pins_.left_port_, pins_.left_pin_) == GPIO_PIN_RESET) ? 1 : 0;
+  ```
