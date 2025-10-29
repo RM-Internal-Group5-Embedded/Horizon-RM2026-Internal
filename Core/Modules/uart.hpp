@@ -1,3 +1,4 @@
+#pragma once
 #include "usart.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -5,16 +6,16 @@
 #include <cstdio>
 #include "gpio.h"
 #include "main.h"
-#define UART_WATCHDOG_TIMEOUT_MS 5000
+#define UART_HEARTBEAT_TIMEOUT_MS 5000
 namespace uartdriver
 {
-    //这个是保存看门狗（一种重连机制）的数据接收时间，接收超时时长和flag的结构体
+    //这个是保存心跳检测（一种重连机制）的数据接收时间，接收超时时长和flag的结构体
     typedef struct 
     {
         uint32_t last_receive_tick;
         uint32_t timeout_ms;
         uint8_t is_triggered;
-    } UARTWatchdog;
+    } UartHeartbeat;
     //这个是位域的解码结构体
     typedef struct 
     {
@@ -68,32 +69,36 @@ namespace uartdriver
         uint16_t footer;
     };
 
-    class uart
+    class Uart
     {
     private:
-        UARTWatchdog uart_watchdog;//结构体变量
-        ReceivedBitValue received_bit_value;//结构体变量
-        ReceivedValue received_value;//结构体变量
-        uint8_t dma_resetting;//重置DMA的flag
-        uint8_t invalid_data_count;//错误次数
-        uint32_t last_time;//上次接收时间
-        uint32_t time_diff;//接收时间差
+        UartHeartbeat uart_heartbeat_;  // 结构体变量
+        enum { SBUS_FRAME_LEN = 25, SBUS_DMA_BUF_LEN = 64 };
+        uint8_t sbus_buf_[SBUS_DMA_BUF_LEN];
+        ReceivedBitValue received_bit_value_;  // 结构体变量
+        ReceivedValue received_value_;  // 结构体变量
+        uint8_t dma_resetting_;  // 重置DMA的flag
+        uint8_t invalid_data_count_;  // 错误次数
+        uint32_t last_time_;  // 上次接收时间
+        uint32_t time_diff_;  // 接收时间差
+        
         // 私有方法
-        uint8_t validate_number();
-        void TriggerWatchdog();
-        void ResetDMA();
+        uint8_t validateNumber();
+        void triggerHeartbeat();
+        void resetDma();
 
     public:
-        uart();
-        void Init();
-        void FeedWatchdog();
-        void CheckWatchdog();
-        void RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size);
-        // 静态回调桥接（HAL需要C风格回调）
-        static void StaticRxEventCallback(UART_HandleTypeDef *huart, uint16_t Size);
+        Uart();
+        void init();
+        void feedHeartbeat();
+        void checkHeartbeat();
+        void rxEventCallback(UART_HandleTypeDef* _huart, uint16_t _size);
         
         // 公共访问方法
-        const ReceivedValue& GetReceivedValue() const { return received_value; }
-        bool IsDataValid() const { return uart_watchdog.is_triggered == 0; }
+        const ReceivedValue& getReceivedValue() const { return received_value_; }
+        bool isDataValid() const { return uart_heartbeat_.is_triggered == 0; }
     };
 }
+
+// 静态回调桥接函数（C风格，用于HAL回调）
+extern "C" void StaticRxEventCallback(UART_HandleTypeDef* huart, uint16_t size);

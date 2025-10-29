@@ -17,7 +17,8 @@ struct MotorFeedback {
     int16_t angle;
     int16_t last_angle = 0; 
           
-    int16_t rpm;          
+    int16_t rpm; 
+    int16_t bottom_rpm;         
     int16_t current;      
     int16_t temperature;  
     uint32_t last_update; 

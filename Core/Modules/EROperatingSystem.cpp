@@ -4,17 +4,18 @@ const float SBUS_SPAN = 660.0f;
 
 
 void ERStatusControl::switchState(uartdriver::ReceivedValue received_data) {
-    if(received_data.channel_10 > 1500) {
-        current_state = GOLD;
-    } else if(received_data.channel_10 < 500) {
+    if(received_data.channel_10 <=1024) {
         current_state = IDLE;
-    }
-    if(received_data.channel_7 > 1500) {
+    } else {
+        current_state = GOLD;
+        if(received_data.channel_7 > 1500) {
         current_state = MANUAL;
-    }
-    if(received_data.channel_8 > 1500) {
+        }
+        if(received_data.channel_8 > 1500) {
         current_state = MINING;
+        }
     }
+    
 }
 
 void ERStatusControl::goldMode(){

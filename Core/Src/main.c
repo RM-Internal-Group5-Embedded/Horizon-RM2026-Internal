@@ -19,6 +19,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "dma.h"
+#include "fdcan.h"
 #include "tim.h"
 #include "usart.h"
 #include "gpio.h"
@@ -91,8 +92,9 @@ int main(void)
   MX_GPIO_Init();
   MX_DMA_Init();
   MX_TIM1_Init();
-  MX_USART1_UART_Init();
   MX_TIM2_Init();
+  MX_FDCAN1_Init();
+  MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
   // Write the option bytes, !!DO NOT MODIFY!!
   FLASH_OBProgramInitTypeDef pOBInit;
@@ -145,6 +147,7 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
+
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */

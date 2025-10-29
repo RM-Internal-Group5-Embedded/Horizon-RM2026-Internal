@@ -7,8 +7,8 @@ MotorFunctions::MotorFunctions(int id, pFDCAN_RxFifo0CallbackTypeDef callback,
     motor_id = id;
     RPM_KP = 100.0f;
     RPM_KI = 0.1f;
-    RPM_KD = 2.0f;
-    MAX_CURRENT = 16000; 
+    RPM_KD = 10.0f;
+    MAX_CURRENT = 5000; 
 
     // choose filter/tx header based on id range
     filter = Modules::DJIMotors::getFilter(0x201, 0x204);
@@ -19,8 +19,7 @@ MotorFunctions::MotorFunctions(int id, pFDCAN_RxFifo0CallbackTypeDef callback,
     last_time = current_time = HAL_GetTick();
     resetData();
 
-    // Register the filter and callbacks
-    Modules::DJIMotors::init(callback, errorCallback, &filter);
+    // Note: Filter/callbacks now registered once in canbridge::init
 }
 
 MG90SFunctions::MG90SFunctions(int id, pFDCAN_RxFifo0CallbackTypeDef callback, 
@@ -34,7 +33,6 @@ MG90SFunctions::MG90SFunctions(int id, pFDCAN_RxFifo0CallbackTypeDef callback,
     RPM_KI = 0.05f; 
     RPM_KD = 0.5f; 
     MAX_CURRENT = 5000;
-    Modules::DJIMotors::init(callback, errorCallback, &filter);
 }
 
 JGA25370Functions::JGA25370Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callback, 
@@ -45,7 +43,6 @@ JGA25370Functions::JGA25370Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callb
     filter = Modules::DJIMotors::getFilter(filterID2, filterID1);
     txHeader = Modules::DJIMotors::getTxHeader(id, Modules::DJIMotors::MotorType::M3508);
     RPM_KP = 50.0f; RPM_KI = 0.1f; RPM_KD = 1.0f; MAX_CURRENT = 12000;
-    Modules::DJIMotors::init(callback, errorCallback, &filter);
 }
 
 
@@ -59,9 +56,8 @@ M3508Functions::M3508Functions(int id,  pFDCAN_RxFifo0CallbackTypeDef callback,
             // Default PID values for M3508
     RPM_KP = 100.0f;
     RPM_KI = 0.1f;
-    RPM_KD = 2.0f;
-    MAX_CURRENT = 16000;
-    Modules::DJIMotors::init(callback, errorCallback, &filter);
+    RPM_KD = 20.0f;
+    MAX_CURRENT = 10000;
 }
 
 // Provide a base virtual method implementation so the vtable is emitted
@@ -105,7 +101,9 @@ void M3508Functions::readMotorFeedback(uint8_t rxData[8]) {
     prev_angle = current_angle;
     // Store data
     motor_feedback.angle = current_angle;
-    motor_feedback.rpm = (187.0f / 3591.0f) * ((rxData[2] << 8) | rxData[3]);
+    
+    motor_feedback.bottom_rpm = ((rxData[2] << 8) | rxData[3]);
+    motor_feedback.rpm = (187.0f / 3591.0f) * motor_feedback.bottom_rpm;
     motor_feedback.current = (rxData[4] << 8) | rxData[5];
     motor_feedback.temperature = rxData[6];
     motor_feedback.last_update = current;
