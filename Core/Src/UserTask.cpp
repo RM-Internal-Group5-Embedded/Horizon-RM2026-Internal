@@ -57,6 +57,92 @@ void dataProcessTask(void *pvPara) {
   }
 }
 
+//forward declaration of FDCAN callbacks
+extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs);
+extern "C" void FDCAN1_ErrorStatusCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t ErrorStatusITs);
+
+// Four Mecanum Wheel Motors
+M3508Functions motor_l_f(1, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x201, 0x204); 
+M3508Functions motor_r_f(2, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x202, 0x205); 
+M3508Functions motor_l_b(3, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x203, 0x206); 
+M3508Functions motor_r_b(4, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x207, 0x208); 
+
+// Simple flag to ensure only one RX is processed at a time inside ISR context
+static volatile uint8_t s_fdcanRxInProgress = 0;
+
+extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs) {
+  // FreeRTOS-safe: do minimal work, no blocking calls
+  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_5);
+
+  if ((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) == 0) {
+    return;
+  }
+
+  if (s_fdcanRxInProgress) {
+    return; // Drop/skip if already processing to avoid re-entrancy
+  }
+  s_fdcanRxInProgress = 1;
+  FDCAN_RxHeaderTypeDef rxHeader;
+  uint8_t rxData[8];
+  if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK) {
+    uint16_t can_id = rxHeader.Identifier;
+    // Dispatch to corresponding motor instance by CAN ID
+    switch (can_id) {
+      case 0x201: motor_l_f.readMotorFeedback(rxData); break;
+      case 0x202: motor_r_f.readMotorFeedback(rxData); break;
+      case 0x203: motor_l_b.readMotorFeedback(rxData); break;
+      case 0x204: motor_r_b.readMotorFeedback(rxData); break;
+      default: break;
+    }
+  }
+  s_fdcanRxInProgress = 0;
+}
+
+extern "C" void FDCAN1_ErrorStatusCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t ErrorStatusITs) {
+  // Optionally record or toggle an LED; keep ISR short
+  (void)hfdcan;
+  (void)ErrorStatusITs;
+}
+
+void updateERTask(void *pvPara) {
+  ERStatusControl er_status_control(
+      motor_l_f, motor_r_f,
+      motor_l_b, motor_r_b
+  );
+
+  while (true) {
+    // 获取最新的UART接收数据
+    const uartdriver::ReceivedValue& received_data = g_uart.getReceivedValue();
+
+    // 根据接收到的数据切换状态
+    er_status_control.switchState(received_data);
+
+    // 执行当前状态对应的操作
+    switch (er_status_control.current_state) {
+      case ERStatusControl::IDLE:
+        er_status_control.idleMode();
+        break;
+      case ERStatusControl::MANUAL:
+        er_status_control.manualMode(received_data);
+        break;
+      case ERStatusControl::GOLD:
+        er_status_control.goldMode();
+        break;
+      case ERStatusControl::MINING:
+        er_status_control.miningMode(received_data);
+        break;
+      case ERStatusControl::DEPOSIT:
+        // er_status_control.depositMode();
+      case ERStatusControl::ERROR:
+        er_status_control.idleMode();
+        break;
+        // Handle error state if needed
+      break;
+    }
+    vTaskDelay(pdMS_TO_TICKS(10)); // 100 Hz loop
+  }
+}
+
 /**
  * @brief Intialize all the drivers and add task to the scheduler
  * @todo  Add your own task in this file
@@ -68,6 +154,10 @@ void startUserTasks() {
   
   // 创建数据处理任务 - 中优先级，显示接收状态
   xTaskCreateStatic(dataProcessTask, "DataProcess_Task", configMINIMAL_STACK_SIZE * 3, NULL, 2,
+                    uxDataProcessTaskStack, &xDataProcessTaskTCB);
+  
+  // 创建ER状态更新任务 - 负责根据UART数据更新ER状态
+  xTaskCreateStatic(updateERTask, "update_ER_Task", configMINIMAL_STACK_SIZE * 3, NULL, 2,
                     uxDataProcessTaskStack, &xDataProcessTaskTCB);
   
   /**
