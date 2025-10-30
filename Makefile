@@ -60,7 +60,6 @@ C_SOURCES =  \
 Core/Src/main.c \
 Core/Src/gpio.c \
 Core/Src/tim.c \
-Core/Src/usart.c \
 Core/Src/stm32g4xx_it.c \
 Core/Src/stm32g4xx_hal_msp.c \
 Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal.c \
@@ -78,15 +77,18 @@ Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_pwr_ex.c \
 Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_cortex.c \
 Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_tim.c \
 Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_tim_ex.c \
-Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_uart.c \
-Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_uart_ex.c \
 Core/Src/system_stm32g4xx.c \
 Core/Src/sysmem.c \
 Core/Src/syscalls.c \
-Core/Src/dma.c
+Core/Src/dma.c \
+Core/Src/usart.c \
+Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_uart.c \
+Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_uart_ex.c
 
 
 CPP_SOURCES  = \
+$(wildcard Core/Src/*.cpp) \
+$(wildcard Core/Modules/*.cpp)
 $(wildcard Core/Src/*.cpp) \
 $(wildcard Core/Modules/*.cpp)
 
@@ -112,6 +114,7 @@ AS_INCLUDES =
 # C includes
 C_INCLUDES =  \
 -ICore/Inc \
+-ICore/Modules \
 -ICore/Modules \
 -IDrivers/STM32G4xx_HAL_Driver/Inc \
 -IDrivers/STM32G4xx_HAL_Driver/Inc/Legacy \

@@ -17,7 +17,7 @@
 
 
 // 全局UART实例
-uartdriver::uart g_uart;
+uartdriver::Uart g_uart;
 
 // 全局Line Follower实例（使用实际IR传感器引脚）
 LineFollower::SensorPins line_follower_pins = {
@@ -29,8 +29,8 @@ LineFollower::SensorPins line_follower_pins = {
 LineFollower::LineFollowerController g_line_follower(line_follower_pins);
 
 // 任务栈和控制块
-// UART任务栈 - 需要处理复杂的数据结构和DMA操作
-StackType_t uxUartTaskStack[configMINIMAL_STACK_SIZE * 3];  // 384字节 (1536 bytes)
+// UART任务栈 - 需要处理复杂的数据结构和DMA操作，使用更大的栈
+StackType_t uxUartTaskStack[configMINIMAL_STACK_SIZE * 8];  // 1024字节栈
 StaticTask_t xUartTaskTCB;
 
 // 数据处理任务栈 - 用于处理接收到的数据
@@ -43,31 +43,14 @@ StaticTask_t xLineFollowerTaskTCB;
 // UART任务函数 - 负责UART初始化和看门狗检查
 void uartTask(void *pvPara) {
   // 初始化UART
-  g_uart.Init();
+  g_uart.init();
   
   while (true) {
-    // 检查看门狗（这个方法需要在循环中定期调用）
-    g_uart.CheckWatchdog();
+    // 检查心跳（这个方法需要在循环中定期调用）
+    g_uart.checkHeartbeat();
     
     // 延时，避免任务占用过多CPU
-    vTaskDelay(pdMS_TO_TICKS(50));  // 50ms延时，看门狗检查不需要太频繁
-  }
-}
-
-// 数据处理任务函数 - 负责显示接收状态
-void dataProcessTask(void *pvPara) {
-  while (true) {
-    // 检查数据是否有效
-    if (g_uart.IsDataValid()) {
-      // 显示接收状态 - LED1亮表示数据有效
-      HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);
-    } else {
-      // 数据无效时LED1熄灭
-      HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
-    }
-    
-    // 延时，避免任务占用过多CPU
-    vTaskDelay(pdMS_TO_TICKS(100));  // 100ms延时
+    vTaskDelay(pdMS_TO_TICKS(50));  // 50ms延时，心跳检查不需要太频繁
   }
 }
 
@@ -97,10 +80,8 @@ void lineFollowerTask(void *pvPara) {
  * @todo  Add your own task in this file
  */
 void startUserTasks() {
-  // UART任务暂时禁用 - uart::Init()需要更大的栈空间
-  // TODO: 增加UART任务栈大小或优化uart::Init()
-  /*
-  xTaskCreateStatic(uartTask, "UART_Task", configMINIMAL_STACK_SIZE * 3, NULL, 3,
+  // 创建UART处理任务 - 高优先级，负责UART通信和心跳检查
+  xTaskCreateStatic(uartTask, "UART_Task", configMINIMAL_STACK_SIZE * 8, NULL, 3,
                     uxUartTaskStack, &xUartTaskTCB);
   */
   
