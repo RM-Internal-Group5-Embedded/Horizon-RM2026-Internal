@@ -19,27 +19,26 @@
 // 全局UART实例
 uartdriver::uart g_uart;
 
-// 全局Line Follower实例（使用占位符引脚配置）
-// TODO: 实际GPIO引脚配置待定，当前使用LED引脚作为占位符
+// 全局Line Follower实例（使用实际IR传感器引脚）
 LineFollower::SensorPins line_follower_pins = {
-    GPIOB, GPIO_PIN_12,  // Slot sensor (placeholder: LED1)
-    GPIOB, GPIO_PIN_13,  // Left sensor (placeholder: LED2)
-    GPIOC, GPIO_PIN_13,  // Middle sensor (placeholder: BTN_0)
-    GPIOC, GPIO_PIN_14   // Right sensor (placeholder: BTN_1)
+    IR1_GPIO_Port, IR1_Pin,  // Slot sensor (S) - PA2
+    IR2_GPIO_Port, IR2_Pin,  // Left sensor (L) - PB0
+    IR3_GPIO_Port, IR3_Pin,  // Middle sensor (M) - PB2
+    IR4_GPIO_Port, IR4_Pin   // Right sensor (R) - PC6
 };
 LineFollower::LineFollowerController g_line_follower(line_follower_pins);
 
 // 任务栈和控制块
-// UART任务栈 - 需要处理复杂的数据结构和DMA操作，使用更大的栈
-StackType_t uxUartTaskStack[configMINIMAL_STACK_SIZE * 4];  // 512字节栈
+// UART任务栈 - 需要处理复杂的数据结构和DMA操作
+StackType_t uxUartTaskStack[configMINIMAL_STACK_SIZE * 3];  // 384字节 (1536 bytes)
 StaticTask_t xUartTaskTCB;
 
 // 数据处理任务栈 - 用于处理接收到的数据
-StackType_t uxDataProcessTaskStack[configMINIMAL_STACK_SIZE * 3];  // 384字节栈
+StackType_t uxDataProcessTaskStack[configMINIMAL_STACK_SIZE * 2];  // 256字节 (1024 bytes)
 StaticTask_t xDataProcessTaskTCB;
 
-// Line Follower任务栈 - 处理传感器读取和控制逻辑
-StackType_t uxLineFollowerTaskStack[configMINIMAL_STACK_SIZE * 4];  // 512字节栈
+// Line Follower任务栈 - 轻量级传感器读取和控制逻辑
+StackType_t uxLineFollowerTaskStack[configMINIMAL_STACK_SIZE * 2];  // 256字节 (1024 bytes)
 StaticTask_t xLineFollowerTaskTCB;
 // UART任务函数 - 负责UART初始化和看门狗检查
 void uartTask(void *pvPara) {
@@ -98,16 +97,21 @@ void lineFollowerTask(void *pvPara) {
  * @todo  Add your own task in this file
  */
 void startUserTasks() {
-  // 创建UART处理任务 - 高优先级，负责UART通信和看门狗检查
-  xTaskCreateStatic(uartTask, "UART_Task", configMINIMAL_STACK_SIZE * 4, NULL, 3,
+  // UART任务暂时禁用 - uart::Init()需要更大的栈空间
+  // TODO: 增加UART任务栈大小或优化uart::Init()
+  /*
+  xTaskCreateStatic(uartTask, "UART_Task", configMINIMAL_STACK_SIZE * 3, NULL, 3,
                     uxUartTaskStack, &xUartTaskTCB);
+  */
   
-  // 创建数据处理任务 - 中优先级，显示接收状态
-  xTaskCreateStatic(dataProcessTask, "DataProcess_Task", configMINIMAL_STACK_SIZE * 3, NULL, 2,
+  // 数据处理任务暂时禁用 - 依赖UART
+  /*
+  xTaskCreateStatic(dataProcessTask, "DataProcess_Task", configMINIMAL_STACK_SIZE * 2, NULL, 2,
                     uxDataProcessTaskStack, &xDataProcessTaskTCB);
+  */
   
   // 创建Line Follower任务 - 中优先级，负责线循迹控制
-  xTaskCreateStatic(lineFollowerTask, "LineFollower_Task", configMINIMAL_STACK_SIZE * 4, NULL, 2,
+  xTaskCreateStatic(lineFollowerTask, "LineFollower_Task", configMINIMAL_STACK_SIZE * 2, NULL, 2,
                     uxLineFollowerTaskStack, &xLineFollowerTaskTCB);
   
   /**
