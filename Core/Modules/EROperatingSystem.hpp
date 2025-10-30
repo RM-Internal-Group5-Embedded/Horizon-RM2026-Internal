@@ -25,6 +25,10 @@ class ERStatusControl {
 private:
     int16_t front_left_rpm, front_right_rpm,
             back_left_rpm,  back_right_rpm;
+    float pid_integral_lf, pid_prev_error_lf;
+    float pid_integral_rf, pid_prev_error_rf;
+    float pid_integral_lb, pid_prev_error_lb;
+    float pid_integral_rb, pid_prev_error_rb;
 public:
     enum ERState {
         IDLE, MANUAL, GOLD, MINING, DEPOSIT, ERROR
@@ -35,7 +39,11 @@ public:
     ERState current_state;
 
     ERStatusControl(M3508Functions& motor_front_left, M3508Functions& motor_front_right,
-                    M3508Functions& motor_back_left, M3508Functions& motor_back_right) {
+                    M3508Functions& motor_back_left, M3508Functions& motor_back_right) 
+        : pid_integral_lf(0), pid_prev_error_lf(0),
+          pid_integral_rf(0), pid_prev_error_rf(0),
+          pid_integral_lb(0), pid_prev_error_lb(0),
+          pid_integral_rb(0), pid_prev_error_rb(0) {
         this->manual_control.motor_front_left = &motor_front_left;
         this->manual_control.motor_front_right = &motor_front_right;    
         this->manual_control.motor_back_left = &motor_back_left;
@@ -52,7 +60,7 @@ public:
         this->manual_control.claw_servo = &claw_servo;
     }   
 
-    void switchState(uartdriver::ReceivedValue received_data);
+    void switchState(const uartdriver::ReceivedValue& received_data);
 
     void goldMode();
 

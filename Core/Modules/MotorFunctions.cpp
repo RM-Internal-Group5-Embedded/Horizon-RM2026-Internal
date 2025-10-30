@@ -54,10 +54,10 @@ M3508Functions::M3508Functions(int id,  pFDCAN_RxFifo0CallbackTypeDef callback,
     filter = Modules::DJIMotors::getFilter(filterID2, filterID1); 
     txHeader = Modules::DJIMotors::getTxHeader(id, Modules::DJIMotors::MotorType::M3508);
             // Default PID values for M3508
-    RPM_KP = 100.0f;
+    RPM_KP = 50.0f;
     RPM_KI = 0.1f;
-    RPM_KD = 20.0f;
-    MAX_CURRENT = 10000;
+    RPM_KD = 1.2f;
+    MAX_CURRENT = 20000;
 }
 
 // Provide a base virtual method implementation so the vtable is emitted

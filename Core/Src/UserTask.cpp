@@ -71,32 +71,22 @@ extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxF
     uint16_t id = (uint16_t)rxHeader.Identifier;
     s_lastCanId = id;  // Store for debugging
     
-    bool matched = false;
-    
-    switch(id){
-      case 0x201:
-        motor_l_f_p->readMotorFeedback(rxData);
-        matched = true;
-        break;
-      case 0x202:
-        motor_r_f_p->readMotorFeedback(rxData);
-        matched = true;
-        break;
-      case 0x203:
-        motor_l_b_p->readMotorFeedback(rxData);
-        matched = true;
-        break;
-      case 0x204:
-        motor_r_b_p->readMotorFeedback(rxData);
-        matched = true;
-        break;
-      default:
-        break;
+    // Temporary: accept ANY ID and dispatch to all motors for testing
+    // TODO: Replace with actual motor IDs once identified via debugger (s_lastCanId)
+    if (id >= 0x201 && id <= 0x208) {
+      // Try dispatching based on ID offset
+      uint8_t motor_idx = id - 0x201;
+      switch(motor_idx) {
+        case 0: motor_l_f_p->readMotorFeedback(rxData); break;
+        case 1: motor_r_f_p->readMotorFeedback(rxData); break;
+        case 2: motor_l_b_p->readMotorFeedback(rxData); break;
+        case 3: motor_r_b_p->readMotorFeedback(rxData); break;
+        default: break;
+      }
+    } else {
+      // Unknown ID - blink PB12
+      HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_12);
     }
-      // motor_l_f_p->readMotorFeedback(rxData);
-      // motor_r_f_p->readMotorFeedback(rxData);
-      // motor_l_b_p->readMotorFeedback(rxData);
-      // motor_r_b_p->readMotorFeedback(rxData);
       
     
   }
@@ -108,25 +98,45 @@ extern "C" void FDCAN1_ErrorStatusCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t
 
 ERStatusControl *er_status_control_p = nullptr;
 
+//const uartdriver::ReceivedValue& received_data;
+
 void updateERTask(void *pvPara) {
   (void)pvPara;
   
-  // Send zero current once to trigger motor feedback
+  // Send combined zero current once to trigger motor feedback
   static bool sent_init = false;
   if (!sent_init) {
-    motor_l_f_p->sendCurrent(0);
-    motor_r_f_p->sendCurrent(0);
-    motor_l_b_p->sendCurrent(0);
-    motor_r_b_p->sendCurrent(0);
+    // Send all four motors in ONE message to 0x200
+    extern FDCAN_HandleTypeDef hfdcan1;
+    uint8_t data[8] = {0};
+    FDCAN_TxHeaderTypeDef txHeader;
+    txHeader.Identifier = 0x200;
+    txHeader.IdType = FDCAN_STANDARD_ID;
+    txHeader.TxFrameType = FDCAN_DATA_FRAME;
+    txHeader.DataLength = FDCAN_DLC_BYTES_8;
+    txHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+    txHeader.BitRateSwitch = FDCAN_BRS_OFF;
+    txHeader.FDFormat = FDCAN_CLASSIC_CAN;
+    txHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+    txHeader.MessageMarker = 0;
+    HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &txHeader, data);
     sent_init = true;
   }
   
   while (true) {
     // 获取最新的UART接收数据
-    const uartdriver::ReceivedValue& received_data = g_uart.getReceivedValue();
+    //received_data = g_uart.getReceivedValue();
 
     // 根据接收到的数据切换状态
-    er_status_control_p->switchState(received_data);
+    er_status_control_p->switchState(g_uart.getReceivedValue());
+
+    // Debug: indicate state with LEDs
+    // LED1 ON = data valid, OFF = invalid
+    if (g_uart.isDataValid()) {
+      HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);
+    } else {
+      HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
+    }
 
     // 执行当前状态对应的操作
     switch (er_status_control_p->current_state) {
@@ -134,13 +144,13 @@ void updateERTask(void *pvPara) {
         er_status_control_p->idleMode();
         break;
       case ERStatusControl::MANUAL:
-        er_status_control_p->manualMode(received_data);
+        er_status_control_p->manualMode(g_uart.getReceivedValue());
         break;
       case ERStatusControl::GOLD:
         er_status_control_p->goldMode();
         break;
       case ERStatusControl::MINING:
-        er_status_control_p->miningMode(received_data);
+        er_status_control_p->miningMode(g_uart.getReceivedValue());
         break;
       case ERStatusControl::DEPOSIT:
         // er_status_control_p->depositMode();
