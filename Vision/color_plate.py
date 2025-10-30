@@ -4,32 +4,40 @@ from PIL import Image
 
 red=[0,0,255]#red in BGR colorspace
 blue=[255,0,0]
-
-def get_limits(color):
-    c=np.uint8([[color]])#insert the bgr value which you want to convert to hsv
-    hsvC=cv2.cvtColor(c,cv2.COLOR_BGR2HSV)
-    
-    lowerLimit=hsvC[0][0][0]-20,50,50 #可以修改上下限范围
-    upperLimit=hsvC[0][0][0]+20,255,255
-
-    lowerLimit=np.array(lowerLimit,dtype=np.uint8)
-    upperLimit=np.array(upperLimit,dtype=np.uint8)
-
-    return lowerLimit,upperLimit
+green=[0,255,0]
 
 #找到color所在的地方 获取mask
 def detect_colors(frame):
     hsv_frame=cv2.cvtColor(frame,cv2.COLOR_BGR2HSV)#转换为HSV
 
-    lowerLimit,upperLimit=get_limits(red)
-    red_mask=cv2.inRange(hsv_frame,lowerLimit,upperLimit)
-    #exact locations of all the pixels containing the information we want
-
-    lowerLimit,upperLimit=get_limits(blue)
-    blue_mask=cv2.inRange(hsv_frame,lowerLimit,upperLimit)
-
-    return red_mask, blue_mask
+    # 红色在HSV空间上分两段
+    lower_red1 = np.array([0, 70, 50])
+    upper_red1 = np.array([10, 255, 255])
+    lower_red2 = np.array([170, 70, 50])
+    upper_red2 = np.array([180, 255, 255])
     
+    red_mask1 = cv2.inRange(hsv_frame, lower_red1, upper_red1)
+    red_mask2 = cv2.inRange(hsv_frame, lower_red2, upper_red2)
+    red_mask = cv2.bitwise_or(red_mask1, red_mask2)
+
+    # 蓝色区间Hue建议100~130左右，饱和度/明度门槛别太低
+    lower_blue = np.array([100, 120, 70])
+    upper_blue = np.array([130, 255, 255])
+    blue_mask = cv2.inRange(hsv_frame, lower_blue, upper_blue)
+
+    # 绿色区间Hue
+    lower_green = np.array([35, 40, 40])
+    upper_green = np.array([90, 255, 255])
+    green_mask = cv2.inRange(hsv_frame, lower_green, upper_green)
+
+    #去噪
+    kernel = np.ones((5, 5), np.uint8)
+    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
+    blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel)
+    green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_OPEN, kernel)
+    
+    return red_mask, blue_mask, green_mask  
+
 
 #找到color对应的所有bounding box
 def find_bboxs(mask):
@@ -40,7 +48,7 @@ def find_bboxs(mask):
     for contour in contours:
         # 过滤掉太小的区域
         area=cv2.contourArea(contour)
-        if area>500:  #可以修改这个阈值来过滤噪声
+        if area>1000:  #可以修改这个阈值来过滤噪声
             x,y,w,h=cv2.boundingRect(contour)
             bboxs.append((x,y,x+w,y+h))
     
@@ -48,7 +56,7 @@ def find_bboxs(mask):
 
 def main():
     #使用opencv调用电脑中的摄像头 需要传入摄像头的序号 到设备管理器中看
-    capture=cv2.VideoCapture()
+    capture=cv2.VideoCapture(0)
 
     if capture.isOpened():
         print("USB相机连接成功")
@@ -67,10 +75,10 @@ def main():
             break
         
         #检测红蓝色块，现在可以检测多个
-        red_mask, blue_mask = detect_colors(frame)
+        red_mask, blue_mask, green_mask = detect_colors(frame)
         red_blocks = find_bboxs(red_mask)
         blue_blocks = find_bboxs(blue_mask)
-        
+        green_blocks=find_bboxs(green_mask)
            
         #在图像上绘制结果
         #红色block边框显示
@@ -87,6 +95,13 @@ def main():
             # 添加标签
             cv2.putText(frame, 'Blue', (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,0,0), 2)
        
+        #绿色block边框显示
+        for green_block in green_blocks:
+            x1,y1,x2,y2= green_block
+            cv2.rectangle(frame,(x1,y1),(x2,y2),(0,255,0),5)
+            # 添加标签
+            cv2.putText(frame, 'Green', (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
+
         cv2.imshow("camera",frame)
         #等待键盘输入1毫秒
         key=cv2.waitKey(1)
