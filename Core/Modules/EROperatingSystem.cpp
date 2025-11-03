@@ -1,8 +1,32 @@
 #include "EROperatingSystem.hpp"
 
+// Constructor implementation
+ERStatusControl::ERStatusControl(M3508Functions& motor_front_left, M3508Functions& motor_front_right,
+                                 M3508Functions& motor_back_left, M3508Functions& motor_back_right, 
+                                 float lengthx, float lengthy) {
+    this->manual_control.motor_front_left = &motor_front_left;
+    this->manual_control.motor_front_right = &motor_front_right;    
+    this->manual_control.motor_back_left = &motor_back_left;
+    this->manual_control.motor_back_right = &motor_back_right;
+    lengthX = lengthx;
+    lengthY = lengthy;
+    
+    // Initialize shared TX header once (for 0x200)
+    motor_tx_header.Identifier = 0x200;
+    motor_tx_header.IdType = FDCAN_STANDARD_ID;
+    motor_tx_header.TxFrameType = FDCAN_DATA_FRAME;
+    motor_tx_header.DataLength = FDCAN_DLC_BYTES_8;
+    motor_tx_header.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+    motor_tx_header.BitRateSwitch = FDCAN_BRS_OFF;
+    motor_tx_header.FDFormat = FDCAN_CLASSIC_CAN;
+    motor_tx_header.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+    motor_tx_header.MessageMarker = 0;
+}
+
 const float CENTER = 1024.0f;
 const float SBUS_SPAN = 783.0f;
 
+//Plan: use FSM to enable multiple states: |, & 0x0008 
 
 void ERStatusControl::switchState(const uartdriver::ReceivedValue& received_data) {
     if(received_data.channel_10 <=1024) {
@@ -25,10 +49,14 @@ void ERStatusControl::goldMode(){
 }
 
 void ERStatusControl::idleMode() {
-    manual_control.motor_front_left ->stopLoop();
-    manual_control.motor_front_right->stopLoop();
-    manual_control.motor_back_left  ->stopLoop();
-    manual_control.motor_back_right ->stopLoop();
+    // Send zero current to all 4 motors
+    sendMotorCurrents(0, 0, 0, 0);
+    
+    // Reset PID states in each motor
+    manual_control.motor_front_left->resetData();
+    manual_control.motor_front_right->resetData();
+    manual_control.motor_back_left->resetData();
+    manual_control.motor_back_right->resetData();
 }
 
 void ERStatusControl::manualMode(const uartdriver::ReceivedValue& received_data) {
@@ -64,7 +92,8 @@ void ERStatusControl::traversal( uint16_t joystick_r_x, uint16_t joystick_r_y,
     rx = curve_half_quad(apply_deadband(rx, 0.03f)) * static_cast<float>(rpm_magnitude);
     ry = curve_half_quad(apply_deadband(ry, 0.03f)) * static_cast<float>(rpm_magnitude);
     // Keep rotation linear
-    lx = apply_deadband(lx, 0.03f) * static_cast<float>(angle_magnitude);
+    lx = apply_deadband(lx, 0.03f) * static_cast<float>(angle_magnitude) ;
+    //* (lengthX + lengthY);
 
     // Mecanum mix
     front_left_rpm  = static_cast<int16_t>(ry + rx + lx);
@@ -72,53 +101,43 @@ void ERStatusControl::traversal( uint16_t joystick_r_x, uint16_t joystick_r_y,
     back_left_rpm   = static_cast<int16_t>(ry - rx + lx);
     back_right_rpm  = static_cast<int16_t>(ry + rx - lx);
 
-    // Calculate PID outputs for all motors (but don't send yet)
-    manual_control.motor_front_left->motor_feedback.target_rpm = front_left_rpm;
-    manual_control.motor_front_right->motor_feedback.target_rpm = front_right_rpm;
-    manual_control.motor_back_left->motor_feedback.target_rpm = back_left_rpm;
-    manual_control.motor_back_right->motor_feedback.target_rpm = back_right_rpm;
-    
-    // Send all four motor currents in ONE CAN message to 0x200
-    extern FDCAN_HandleTypeDef hfdcan1;
-    uint8_t data[8];
-    
-    // Get PID outputs for each motor
+    // Calculate timing
+    static uint32_t last_time = 0;
     uint32_t current_time = HAL_GetTick();
-    float dt = 0.01f; // ~10ms assumed
     
-    int16_t curr_lf = (int16_t)Modules::PID::calculate(
-        (float)front_left_rpm, (float)manual_control.motor_front_left->motor_feedback.rpm,
-        manual_control.motor_front_left->RPM_KP, manual_control.motor_front_left->RPM_KI, 
-        manual_control.motor_front_left->RPM_KD, pid_integral_lf, pid_prev_error_lf, dt);
-    int16_t curr_rf = (int16_t)Modules::PID::calculate(
-        (float)front_right_rpm, (float)manual_control.motor_front_right->motor_feedback.rpm,
-        manual_control.motor_front_right->RPM_KP, manual_control.motor_front_right->RPM_KI, 
-        manual_control.motor_front_right->RPM_KD, pid_integral_rf, pid_prev_error_rf, dt);
-    int16_t curr_lb = (int16_t)Modules::PID::calculate(
-        (float)back_left_rpm, (float)manual_control.motor_back_left->motor_feedback.rpm,
-        manual_control.motor_back_left->RPM_KP, manual_control.motor_back_left->RPM_KI, 
-        manual_control.motor_back_left->RPM_KD, pid_integral_lb, pid_prev_error_lb, dt);
-    int16_t curr_rb = (int16_t)Modules::PID::calculate(
-        (float)back_right_rpm, (float)manual_control.motor_back_right->motor_feedback.rpm,
-        manual_control.motor_back_right->RPM_KP, manual_control.motor_back_right->RPM_KI, 
-        manual_control.motor_back_right->RPM_KD, pid_integral_rb, pid_prev_error_rb, dt);
+    // Reset timing on first call or after long gap
+    if (last_time == 0 || (current_time - last_time) > 1000) {
+        last_time = current_time;
+    }
     
-    // Pack all currents into one message (motor IDs 1-4 → bytes 0-7)
-    data[0] = (curr_lf >> 8) & 0xFF; data[1] = curr_lf & 0xFF;
-    data[2] = (curr_rf >> 8) & 0xFF; data[3] = curr_rf & 0xFF;
-    data[4] = (curr_lb >> 8) & 0xFF; data[5] = curr_lb & 0xFF;
-    data[6] = (curr_rb >> 8) & 0xFF; data[7] = curr_rb & 0xFF;
+    float dt = (current_time - last_time) / 1000.0f;
+    if (dt <= 0 || dt > 0.1f) dt = 0.01f;
+    last_time = current_time;
     
-    FDCAN_TxHeaderTypeDef txHeader;
-    txHeader.Identifier = 0x200;
-    txHeader.IdType = FDCAN_STANDARD_ID;
-    txHeader.TxFrameType = FDCAN_DATA_FRAME;
-    txHeader.DataLength = FDCAN_DLC_BYTES_8;
-    txHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
-    txHeader.BitRateSwitch = FDCAN_BRS_OFF;
-    txHeader.FDFormat = FDCAN_CLASSIC_CAN;
-    txHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
-    txHeader.MessageMarker = 0;
+    // Use motor class PID methods (send = false, just calculate)
+    int16_t curr_lf = manual_control.motor_front_left->setRpmPID(front_left_rpm, dt, false);
+    int16_t curr_rf = manual_control.motor_front_right->setRpmPID(front_right_rpm, dt, false);
+    int16_t curr_lb = manual_control.motor_back_left->setRpmPID(back_left_rpm, dt, false);
+    int16_t curr_rb = manual_control.motor_back_right->setRpmPID(back_right_rpm, dt, false);
     
-    HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &txHeader, data);
+    // Send combined message
+    sendMotorCurrents(curr_lf, curr_rf, curr_lb, curr_rb);
+}
+
+void ERStatusControl::sendMotorCurrents(int16_t curr_lf, int16_t curr_rf, int16_t curr_lb, int16_t curr_rb) {
+    extern FDCAN_HandleTypeDef hfdcan1;
+    uint8_t data[8] = {0}; // Zero initialize
+    
+    // Use motor class methods to pack each current into data array
+    if (manual_control.motor_front_left)
+        manual_control.motor_front_left->packCurrentIntoData(data, curr_lf);
+    if (manual_control.motor_front_right)
+        manual_control.motor_front_right->packCurrentIntoData(data, curr_rf);
+    if (manual_control.motor_back_left)
+        manual_control.motor_back_left->packCurrentIntoData(data, curr_lb);
+    if (manual_control.motor_back_right)
+        manual_control.motor_back_right->packCurrentIntoData(data, curr_rb);
+    
+    // Send using pre-initialized TX header
+    HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &motor_tx_header, data);
 }

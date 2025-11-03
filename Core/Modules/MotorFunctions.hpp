@@ -31,9 +31,9 @@ protected:
 
 public:
     int8_t choice = 1;
-    float RPM_KP = 100.0f;
+    float RPM_KP = 150.0f;
     float RPM_KI = 0.1f;  
-    float RPM_KD = 2.0f;
+    float RPM_KD = 10.0f;
     uint16_t MAX_CURRENT = 16000;
 
     Modules::DJIMotors::MotorFeedback motor_feedback;
@@ -51,11 +51,15 @@ public:
 
     void stopLoop();
 
-    float setRpmPID(int16_t target_rpm, float dt);
-    float setAnglePID(float target_angle, float dt);
+    // Calculate PID output and optionally send
+    int16_t setRpmPID(int16_t target_rpm, float dt, bool send = false);
+    int16_t setAnglePID(float target_angle, float dt, bool send = false);
 
     void setRpm(int16_t target_rpm);
     void setAngle(float target_angle);
+    
+    // Pack this motor's current into the data array at the correct position
+    void packCurrentIntoData(uint8_t* data, int16_t current);
 };
 
 class M3508Functions : public MotorFunctions {
@@ -87,6 +91,24 @@ class JGA25370Functions : public MotorFunctions {
                             uint16_t filterID2, uint16_t filterID1); 
 
     void ReadMotorFeedback(uint8_t rxData[8]);
+};
+
+class DMJ4310Functions : public MotorFunctions {
+    public:
+    DMJ4310Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callback, 
+                            pFDCAN_ErrorStatusCallbackTypeDef errorCallback,
+                            uint16_t filterID2, uint16_t filterID1); 
+
+    void ReadMotorFeedback(uint8_t rxData[8]);
+};
+
+class GM6020Functions : public MotorFunctions {
+    public:
+    GM6020Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callback, 
+                            pFDCAN_ErrorStatusCallbackTypeDef errorCallback,
+                            uint16_t filterID2, uint16_t filterID1);
+
+    void readMotorFeedback(uint8_t rxData[8]) override;
 };
 
 #endif // MOTORFUNCTIONS_HPP

@@ -66,29 +66,24 @@ extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxF
   uint8_t rxData[8];
   
   if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK) {
-    HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_5); // Debug: CAN RX
-    
     uint16_t id = (uint16_t)rxHeader.Identifier;
-    s_lastCanId = id;  // Store for debugging
+    s_lastCanId = id;
     
-    // Temporary: accept ANY ID and dispatch to all motors for testing
-    // TODO: Replace with actual motor IDs once identified via debugger (s_lastCanId)
-    if (id >= 0x201 && id <= 0x208) {
-      // Try dispatching based on ID offset
-      uint8_t motor_idx = id - 0x201;
-      switch(motor_idx) {
-        case 0: motor_l_f_p->readMotorFeedback(rxData); break;
-        case 1: motor_r_f_p->readMotorFeedback(rxData); break;
-        case 2: motor_l_b_p->readMotorFeedback(rxData); break;
-        case 3: motor_r_b_p->readMotorFeedback(rxData); break;
-        default: break;
-      }
-    } else {
-      // Unknown ID - blink PB12
-      HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_12);
+    // Dispatch based on motor ID (0x201-0x204)
+    switch (id) {
+      case 0x201: 
+        if (motor_l_f_p) motor_l_f_p->readMotorFeedback(rxData);
+        break;
+      case 0x202: 
+        if (motor_r_f_p) motor_r_f_p->readMotorFeedback(rxData);
+        break;
+      case 0x203: 
+        if (motor_l_b_p) motor_l_b_p->readMotorFeedback(rxData);
+        break;
+      case 0x204: 
+        if (motor_r_b_p) motor_r_b_p->readMotorFeedback(rxData);
+        break;
     }
-      
-    
   }
 }
 
@@ -102,26 +97,6 @@ ERStatusControl *er_status_control_p = nullptr;
 
 void updateERTask(void *pvPara) {
   (void)pvPara;
-  
-  // Send combined zero current once to trigger motor feedback
-  static bool sent_init = false;
-  if (!sent_init) {
-    // Send all four motors in ONE message to 0x200
-    extern FDCAN_HandleTypeDef hfdcan1;
-    uint8_t data[8] = {0};
-    FDCAN_TxHeaderTypeDef txHeader;
-    txHeader.Identifier = 0x200;
-    txHeader.IdType = FDCAN_STANDARD_ID;
-    txHeader.TxFrameType = FDCAN_DATA_FRAME;
-    txHeader.DataLength = FDCAN_DLC_BYTES_8;
-    txHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
-    txHeader.BitRateSwitch = FDCAN_BRS_OFF;
-    txHeader.FDFormat = FDCAN_CLASSIC_CAN;
-    txHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
-    txHeader.MessageMarker = 0;
-    HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &txHeader, data);
-    sent_init = true;
-  }
   
   while (true) {
     // 获取最新的UART接收数据
@@ -173,6 +148,12 @@ void startUserTasks() {
   static M3508Functions s_motor_r_f(2, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x201, 0x204); 
   static M3508Functions s_motor_l_b(3, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x201, 0x204); 
   static M3508Functions s_motor_r_b(4, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x201, 0x204); 
+  
+  // motor_l_f_p = new M3508Functions(1, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x201, 0x204); 
+  // motor_r_f_p = new M3508Functions(2, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x201, 0x204); 
+  // motor_l_b_p = new M3508Functions(3, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x201, 0x204); 
+  // motor_r_b_p = new M3508Functions(4, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x201, 0x204); 
+
   motor_l_f_p = &s_motor_l_f;
   motor_r_f_p = &s_motor_r_f;
   motor_l_b_p = &s_motor_l_b;
@@ -180,7 +161,8 @@ void startUserTasks() {
 
   static ERStatusControl s_er_status_control(
       *motor_l_f_p, *motor_r_f_p,
-      *motor_l_b_p, *motor_r_b_p
+      *motor_l_b_p, *motor_r_b_p, 
+      3.0, 4.0 //dimensions of car: length * width
   );
   er_status_control_p = &s_er_status_control;
 

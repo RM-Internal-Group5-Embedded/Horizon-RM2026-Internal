@@ -25,7 +25,7 @@ float calculate(const float target, const float current, const float kp,
                 const float ki, const float kd, float &integral,
                 float &previousError, const float dt){
 
-        float error = target - current;
+    float error = target - current;
     
     // Use the provided dt parameter instead of hardcoded 0.001f
     float valid_dt = dt;
@@ -36,8 +36,12 @@ float calculate(const float target, const float current, const float kp,
     // Proportional term
     float p_output_ = kp * error;
     
-    // Integral term - use valid_dt instead of hardcoded 0.001f
+    // Integral term with anti-windup clamping
     integral += error * valid_dt;
+    // Clamp integral to prevent windup (typical range: ±10000)
+    const float MAX_INTEGRAL = 10000.0f;
+    if (integral > MAX_INTEGRAL) integral = MAX_INTEGRAL;
+    else if (integral < -MAX_INTEGRAL) integral = -MAX_INTEGRAL;
     float i_output_ = ki * integral;
     
     // Derivative term - use valid_dt instead of hardcoded 0.001f

@@ -16,6 +16,10 @@ struct ManualControl {
     M3508Functions* motor_back_right    = nullptr;
     
     MG90SFunctions* claw_servo          = nullptr;
+    uint16_t manual_rpm = 1000;
+    uint16_t manual_rotate_rpm = 300;
+    uint16_t mining_rpm = 300;
+    uint16_t mining_rotate_rpm = 100;
 };
 
 // SBUS_t is deprecated; use uartdriver::ReceivedValue instead
@@ -25,10 +29,10 @@ class ERStatusControl {
 private:
     int16_t front_left_rpm, front_right_rpm,
             back_left_rpm,  back_right_rpm;
-    float pid_integral_lf, pid_prev_error_lf;
-    float pid_integral_rf, pid_prev_error_rf;
-    float pid_integral_lb, pid_prev_error_lb;
-    float pid_integral_rb, pid_prev_error_rb;
+    float lengthX, lengthY;
+    
+    // Shared TX header for motor commands (initialized once)
+    FDCAN_TxHeaderTypeDef motor_tx_header;
 public:
     enum ERState {
         IDLE, MANUAL, GOLD, MINING, DEPOSIT, ERROR
@@ -39,16 +43,9 @@ public:
     ERState current_state;
 
     ERStatusControl(M3508Functions& motor_front_left, M3508Functions& motor_front_right,
-                    M3508Functions& motor_back_left, M3508Functions& motor_back_right) 
-        : pid_integral_lf(0), pid_prev_error_lf(0),
-          pid_integral_rf(0), pid_prev_error_rf(0),
-          pid_integral_lb(0), pid_prev_error_lb(0),
-          pid_integral_rb(0), pid_prev_error_rb(0) {
-        this->manual_control.motor_front_left = &motor_front_left;
-        this->manual_control.motor_front_right = &motor_front_right;    
-        this->manual_control.motor_back_left = &motor_back_left;
-        this->manual_control.motor_back_right = &motor_back_right;
-    }
+                    M3508Functions& motor_back_left, M3508Functions& motor_back_right, 
+                    float lengthx, float lengthy);
+
 
     ERStatusControl(M3508Functions& motor_front_left, M3508Functions& motor_front_right,
                     M3508Functions& motor_back_left, M3508Functions& motor_back_right,
@@ -81,4 +78,7 @@ public:
     ERState getState() const {
         return current_state;
     }
+
+    // Send combined motor currents to all 4 motors
+    void sendMotorCurrents(int16_t curr_lf, int16_t curr_rf, int16_t curr_lb, int16_t curr_rb);
 };

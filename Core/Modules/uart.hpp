@@ -6,6 +6,7 @@
 #include <cstdio>
 #include "gpio.h"
 #include "main.h"
+#include "cmsis_gcc.h"  // For __get_PRIMASK, __disable_irq, __enable_irq
 #define UART_HEARTBEAT_TIMEOUT_MS 5000
 namespace uartdriver
 {
@@ -94,8 +95,20 @@ namespace uartdriver
         void checkHeartbeat();
         void rxEventCallback(UART_HandleTypeDef* _huart, uint16_t _size);
         
-        // 公共访问方法
-        const ReceivedValue& getReceivedValue() const { return received_value_; }
+        // 公共访问方法 - Atomic read with interrupt disable
+        ReceivedValue getReceivedValue() const { 
+            // Disable interrupts briefly for atomic read
+            uint32_t primask = __get_PRIMASK();
+            __disable_irq();
+            
+            ReceivedValue copy = received_value_;
+            
+            // Restore interrupt state
+            if (!primask) __enable_irq();
+            
+            return copy;
+        }
+        
         bool isDataValid() const { return uart_heartbeat_.is_triggered == 0; }
     };
 }
