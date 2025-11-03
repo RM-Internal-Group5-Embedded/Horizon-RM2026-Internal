@@ -81,7 +81,7 @@ class MG90SFunctions : public MotorFunctions {
                             pFDCAN_ErrorStatusCallbackTypeDef errorCallback,
                             uint16_t filterID2, uint16_t filterID1); 
 
-    void ReadMotorFeedback(uint8_t rxData[8]);
+    void readMotorFeedback(uint8_t rxData[8]);
 };
 
 class JGA25370Functions : public MotorFunctions {
@@ -90,7 +90,7 @@ class JGA25370Functions : public MotorFunctions {
                             pFDCAN_ErrorStatusCallbackTypeDef errorCallback,
                             uint16_t filterID2, uint16_t filterID1); 
 
-    void ReadMotorFeedback(uint8_t rxData[8]);
+    void readMotorFeedback(uint8_t rxData[8]);
 };
 
 class DMJ4310Functions : public MotorFunctions {
@@ -103,12 +103,29 @@ class DMJ4310Functions : public MotorFunctions {
 };
 
 class GM6020Functions : public MotorFunctions {
-    public:
+private:
+    bool reference_set = false;
+    int32_t reference_counts = 0;  // Position when motor was first powered on
+    int32_t absolute_counts = 0;   // Total counts from reference
+    
+public:
     GM6020Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callback, 
                             pFDCAN_ErrorStatusCallbackTypeDef errorCallback,
                             uint16_t filterID2, uint16_t filterID1);
 
     void readMotorFeedback(uint8_t rxData[8]) override;
+    
+    // Get total rotation in degrees from reference position (rest position)
+    float getAbsoluteDegrees() const {
+        return (float)absolute_counts * 360.0f / 8191.0f;
+    }
+    
+    // Reset current position as the new reference (rest position)
+    void setReferencePosition() {
+        reference_set = true;
+        reference_counts = total_motor_counts;
+        absolute_counts = 0;
+    }
 };
 
 #endif // MOTORFUNCTIONS_HPP

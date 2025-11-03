@@ -55,6 +55,10 @@ M3508Functions * motor_r_f_p = nullptr;
 M3508Functions * motor_l_b_p = nullptr;
 M3508Functions * motor_r_b_p = nullptr;
 
+// Claw Motors (static storage)
+GM6020Functions * gm6020_motor_p = nullptr;  // Small claw (ID 7)
+DMJ4310Functions * dmj4310_motor_p = nullptr;  // Base claw (ID 5)
+
 // Store last received ID for debugging
 static volatile uint16_t s_lastCanId = 0;
 
@@ -69,19 +73,25 @@ extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxF
     uint16_t id = (uint16_t)rxHeader.Identifier;
     s_lastCanId = id;
     
-    // Dispatch based on motor ID (0x201-0x204)
+    // Dispatch based on motor ID
     switch (id) {
-      case 0x201: 
+      case 0x201:  // M3508 motor 1
         if (motor_l_f_p) motor_l_f_p->readMotorFeedback(rxData);
         break;
-      case 0x202: 
+      case 0x202:  // M3508 motor 2
         if (motor_r_f_p) motor_r_f_p->readMotorFeedback(rxData);
         break;
-      case 0x203: 
+      case 0x203:  // M3508 motor 3
         if (motor_l_b_p) motor_l_b_p->readMotorFeedback(rxData);
         break;
-      case 0x204: 
+      case 0x204:  // M3508 motor 4
         if (motor_r_b_p) motor_r_b_p->readMotorFeedback(rxData);
+        break;
+      case 0x209:  // DMJ4310 base claw (ID 5 → CAN ID 0x205+4 = 0x209)
+        if (dmj4310_motor_p) dmj4310_motor_p->ReadMotorFeedback(rxData);
+        break;
+      case 0x20B:  // GM6020 small claw (ID 7 → CAN ID 0x205+6 = 0x20B)
+        if (gm6020_motor_p) gm6020_motor_p->readMotorFeedback(rxData);
         break;
     }
   }
@@ -92,6 +102,7 @@ extern "C" void FDCAN1_ErrorStatusCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t
 }
 
 ERStatusControl *er_status_control_p = nullptr;
+ERClawControl *er_claw_control_p = nullptr;
 
 //const uartdriver::ReceivedValue& received_data;
 
@@ -113,7 +124,7 @@ void updateERTask(void *pvPara) {
       HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
     }
 
-    // 执行当前状态对应的操作
+    // 执行当前状态对应的操作 (chassis control)
     switch (er_status_control_p->current_state) {
       case ERStatusControl::IDLE:
         er_status_control_p->idleMode();
@@ -134,6 +145,18 @@ void updateERTask(void *pvPara) {
         er_status_control_p->idleMode();
         break;
     }
+    
+    // Update claw state based on channel 9
+    const uartdriver::ReceivedValue& uart_data = g_uart.getReceivedValue();
+    if (uart_data.channel_9 > 1500) {
+        er_claw_control_p->setState(ERClawControl::ClawState::IDLE);
+    } else {
+        er_claw_control_p->setState(ERClawControl::ClawState::CLASP);
+    }
+    
+    // Update claw motors
+    er_claw_control_p->update();
+    
     vTaskDelay(pdMS_TO_TICKS(10)); // 100 Hz loop
   }
 }
@@ -143,28 +166,34 @@ void updateERTask(void *pvPara) {
  * @todo  Add your own task in this file
  */
 void startUserTasks() {
-  // Initialize four motors with static storage and assign global pointers
+  // Initialize four M3508 motors with static storage and assign global pointers
   static M3508Functions s_motor_l_f(1, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x201, 0x204); 
   static M3508Functions s_motor_r_f(2, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x201, 0x204); 
   static M3508Functions s_motor_l_b(3, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x201, 0x204); 
   static M3508Functions s_motor_r_b(4, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x201, 0x204); 
   
-  // motor_l_f_p = new M3508Functions(1, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x201, 0x204); 
-  // motor_r_f_p = new M3508Functions(2, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x201, 0x204); 
-  // motor_l_b_p = new M3508Functions(3, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x201, 0x204); 
-  // motor_r_b_p = new M3508Functions(4, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x201, 0x204); 
-
   motor_l_f_p = &s_motor_l_f;
   motor_r_f_p = &s_motor_r_f;
   motor_l_b_p = &s_motor_l_b;
   motor_r_b_p = &s_motor_r_b;
 
+  // Initialize claw motors
+  static DMJ4310Functions s_dmj4310_base(5, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x205, 0x20B);
+  static GM6020Functions s_gm6020_small(7, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x205, 0x20B);
+  dmj4310_motor_p = &s_dmj4310_base;
+  gm6020_motor_p = &s_gm6020_small;
+
+  // Initialize chassis control (4 M3508 motors)
   static ERStatusControl s_er_status_control(
       *motor_l_f_p, *motor_r_f_p,
       *motor_l_b_p, *motor_r_b_p, 
-      3.0, 4.0 //dimensions of car: length * width
+      3.0, 4.0  // dimensions of car: length * width
   );
   er_status_control_p = &s_er_status_control;
+  
+  // Initialize claw control (DMJ4310 + GM6020)
+  static ERClawControl s_er_claw_control(s_dmj4310_base, s_gm6020_small);
+  er_claw_control_p = &s_er_claw_control;
 
   // Configure FDCAN filter, callbacks, and start
   extern FDCAN_HandleTypeDef hfdcan1;
