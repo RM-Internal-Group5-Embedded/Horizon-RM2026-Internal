@@ -20,6 +20,10 @@
 #include "comp.h"  // 包含比较器头文件
 #include "spi.h"  // 包含SPI头文件
 
+// ========== 手动PWM控制（已禁用，如需测试可取消注释） ==========
+// volatile uint16_t g_manual_pwm = 0;          // PWM值 (0-1000)
+// volatile uint8_t g_direction = 0;            // 方向 (0=停止, 1=正转, 2=反转)
+// volatile float g_current_speed = 0.0f;       // 当前速度(mm/s)，用于观察
 
 // 全局左电机实例
 // 使用 TIM15_CH1 (PB14/jga_left_speed) 作为PWM输出
@@ -50,6 +54,10 @@ StaticTask_t xEncoderTaskTCB;
 // MPU6500任务栈
 StackType_t uxMpuTaskStack[configMINIMAL_STACK_SIZE * 4];  // 512字节栈
 StaticTask_t xMpuTaskTCB;
+
+// PWM控制任务栈（已禁用，如需测试可取消注释）
+// StackType_t uxPWMTaskStack[configMINIMAL_STACK_SIZE * 2];  // 256字节栈
+// StaticTask_t xPWMTaskTCB;
 
 // AR控制任务函数
 void arTask(void *pvPara) {
@@ -130,6 +138,41 @@ void mpuTask(void *pvPara) {
   }
 }
 
+// 手动PWM控制任务函数（已禁用，如需测试可取消注释）
+// void pwmTask(void *pvPara) {
+//   // 初始化电机
+//   motor_left.init();
+//   
+//   // 更新周期
+//   const uint32_t UPDATE_PERIOD_MS = 20;  // 20ms
+//   
+//   while (true) {
+//     // 更新当前速度（用于观察）
+//     g_current_speed = encoder_left.getLinearVelocity();
+//     
+//     // 根据方向控制电机
+//     if (g_direction == 0) {
+//       // 停止
+//       motor_left.stop();
+//     } else if (g_direction == 1) {
+//       // 正转
+//       uint16_t pwm = g_manual_pwm;
+//       if (pwm > 1000) pwm = 1000;
+//       motor_left.forward(pwm);
+//     } else if (g_direction == 2) {
+//       // 反转
+//       uint16_t pwm = g_manual_pwm;
+//       if (pwm > 1000) pwm = 1000;
+//       motor_left.backward(pwm);
+//     } else {
+//       // 无效值，停止
+//       motor_left.stop();
+//     }
+//     
+//     vTaskDelay(pdMS_TO_TICKS(UPDATE_PERIOD_MS));
+//   }
+// }
+
 /**
  * @brief Intialize all the drivers and add task to the scheduler
  * @todo  Add your own task in this file
@@ -146,6 +189,10 @@ void startUserTasks() {
   // 创建MPU6500任务 - 优先级5
   xTaskCreateStatic(mpuTask, "MPU_Task", configMINIMAL_STACK_SIZE * 4, NULL, 5,
                     uxMpuTaskStack, &xMpuTaskTCB);
+  
+  // 如果需要手动PWM控制（用于测试），取消注释下面的任务
+  // xTaskCreateStatic(pwmTask, "PWM_Task", configMINIMAL_STACK_SIZE * 2, NULL, 3,
+  //                   uxPWMTaskStack, &xPWMTaskTCB);
   
   /**
    * @todo Add your own task here

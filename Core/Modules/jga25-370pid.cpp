@@ -77,18 +77,18 @@ namespace arpid
         : motor_(motor)
         , encoder_(encoder)
         , mpu_(mpu)
-        , angle_pid_(0.0f, 0.0f, 0.0f)       // 角度环
+        , angle_pid_(20.0f, 0.0f, 10.0f)      // 角度环：Kp=20, Kd=10
         , velocity_pid_(0.0f, 0.0f, 0.0f)     // 速度环
         , enabled_(false)
         , target_velocity_(0.0f)
         , current_angle_(0.0f)
         , current_velocity_(0.0f)
     {
-        angle_pid_.setOutputLimits(-500.0f, 500.0f);  // 输出限幅
+        angle_pid_.setOutputLimits(-1000.0f, 1000.0f);  // 输出限幅
         angle_pid_.setIntegralLimits(-50.0f, 50.0f);
         
-        velocity_pid_.setOutputLimits(-800.0f, 800.0f);
-        velocity_pid_.setIntegralLimits(-200.0f, 200.0f);
+        velocity_pid_.setOutputLimits(-10.0f, 10.0f);  // 速度环输出限制为角度偏移量
+        velocity_pid_.setIntegralLimits(-5.0f, 5.0f);
     }
     
     void AR::init()
@@ -104,7 +104,7 @@ namespace arpid
         }
         
         // 读取传感器
-        current_angle_ = mpu_->getPitch();
+        current_angle_ = -mpu_->getPitch();  // 取反pitch（匹配电机正方向）
         current_velocity_ = encoder_->getLinearVelocity();
         
         // 速度环（外环）
@@ -162,25 +162,17 @@ namespace arpid
     
     int16_t AR::limitMotorOutput(float output)
     {
-        const float MIN_PWM = 540.0f;   // 你的电机最小启动PWM（测试值）
         const float MAX_PWM = 1000.0f;  // 最大PWM
-        const float DEAD_ZONE = 50.0f;  // 死区阈值
+        const float DEAD_ZONE = 5.0f;   // 死区阈值（15 PWM能动，死区设小一点）
+        
+        // 死区处理
+        if (output > -DEAD_ZONE && output < DEAD_ZONE) {
+            return 0;
+        }
         
         // 限幅
-        if (output > 500.0f) output = 500.0f;
-        if (output < -500.0f) output = -500.0f;
-        
-        // 死区 + 最小PWM映射
-        if (output > -DEAD_ZONE && output < DEAD_ZONE) {
-            // 死区：输出太小，直接置0
-            output = 0.0f;
-        } else if (output > 0) {
-            // 正转：映射到 MIN_PWM~MAX_PWM
-            output = MIN_PWM + (output / 500.0f) * (MAX_PWM - MIN_PWM);
-        } else {
-            // 反转：映射到 -MIN_PWM~-MAX_PWM
-            output = -MIN_PWM + (output / 500.0f) * (MAX_PWM - MIN_PWM);
-        }
+        if (output > MAX_PWM) output = MAX_PWM;
+        if (output < -MAX_PWM) output = -MAX_PWM;
         
         return (int16_t)output;
     }
