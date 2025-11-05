@@ -14,26 +14,26 @@ namespace Modules {
 namespace DJIMotors {
 
 struct MotorFeedback {
-    int16_t angle;
+    int16_t angle = 0;
     int16_t last_angle = 0; 
           
-    int16_t rpm; 
-    int16_t bottom_rpm;         
-    int16_t current;      
-    int16_t temperature;  
-    uint32_t last_update; 
+    int16_t rpm = 0; 
+    int16_t bottom_rpm = 0;         
+    int16_t current = 0;      
+    int16_t temperature = 0;  
+    uint32_t last_update = 0; 
 
     int16_t target_rpm = 0;
     float target_angle = 0;
     int16_t output_current = 0;
 
-    float top_shaft_angle;   // 0-360 degrees
-    uint16_t full_rotations; // Total top shaft rotations
+    float top_shaft_angle = 0;   // 0-360 degrees
+    uint16_t full_rotations = 0; // Total top shaft rotations
 
-    float frequency;
+    float frequency = 1000;
 };
 
-enum class MotorType { GM6020 = 0, M3508 = 1 };
+enum class MotorType { GM6020 = 0, M3508 = 1, DMJ4310 = 2 };
 
 //void parseMotorFeedback(uint16_t can_id, uint8_t data[8]);
 

@@ -39,7 +39,7 @@ private:
     FDCAN_TxHeaderTypeDef motor_tx_header;
 public:
     enum ERState {
-        IDLE, MANUAL, GOLD, MINING, DEPOSIT, ERROR
+        IDLE, MANUAL, GOLD, MINING, DEPOSIT, ER_ERROR
     };
     enum class ERState_Claw {
         IDLE, CLASP, RELEASE
@@ -77,8 +77,6 @@ public:
 
     void miningMode(const uartdriver::ReceivedValue& received_data);
 
-    void claspMode(const uartdriver::ReceivedValue& received_data);
-
     void traversal( uint16_t joystick_r_x, uint16_t joystick_r_y,
                     uint16_t joystick_l_x, uint16_t rpm_magnitude, 
                     uint16_t angle_magnitude);
@@ -90,7 +88,7 @@ public:
     ERState getState() const {
         return current_state;
     }
-
+    
     void setClawState(ERState_Claw state) {
         current_state_claw = state;
     }
@@ -98,9 +96,9 @@ public:
     ERState_Claw getClawState() const {
         return current_state_claw;
     }
-
-    // Control GM6020 claw based on state
-    void updateClaw();
+    
+    // Update motors based on current state
+    void update(const uartdriver::ReceivedValue& received_data);
 
     // Send combined motor currents to all 4 motors
     void sendMotorCurrents(int16_t curr_lf, int16_t curr_rf, int16_t curr_lb, int16_t curr_rb);
@@ -109,19 +107,35 @@ public:
 // Separate control system for claw motors
 class ERClawControl {
 private:
-    FDCAN_TxHeaderTypeDef claw_tx_header;  // TX header for 0x2FF
+    // TX headers for different motor groups
+    FDCAN_TxHeaderTypeDef gm6020_tx_header;  // 0x2FF for GM6020 (motors 5-8)
+    FDCAN_TxHeaderTypeDef m3508_tx_header;   // 0x1FF for M3508 (motors 5-8)
     
 public:
     enum class ClawState {
         IDLE, CLASP, RELEASE
     };
     
-    DMJ4310Functions* base_claw = nullptr;
-    GM6020Functions* small_claw = nullptr;
+    struct ClawMotors {
+        DMJ4310Functions* base_claw = nullptr;
+        GM6020Functions* small_claw = nullptr;
+        M3508Functions* m3508_claw = nullptr;  // 5th M3508 motor for claw
+    };
     
+    ClawMotors claw_motors;
     ClawState current_state;
     
     ERClawControl(DMJ4310Functions& base_motor, GM6020Functions& small_motor);
+    
+    ERClawControl(DMJ4310Functions& base_motor, GM6020Functions& small_motor, M3508Functions& m3508_motor);
+    
+    void switchState(const uartdriver::ReceivedValue& received_data);
+    
+    void idleMode();
+    
+    void claspMode();
+    
+    void releaseMode();
     
     void setState(ClawState state) {
         current_state = state;
@@ -133,4 +147,7 @@ public:
     
     // Update claw motors based on state
     void update();
+    
+    // Send claw motor currents
+    void sendClawCurrents(int16_t gm6020_current, int16_t m3508_current);
 };

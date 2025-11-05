@@ -56,8 +56,9 @@ M3508Functions * motor_l_b_p = nullptr;
 M3508Functions * motor_r_b_p = nullptr;
 
 // Claw Motors (static storage)
-GM6020Functions * gm6020_motor_p = nullptr;  // Small claw (ID 7)
-DMJ4310Functions * dmj4310_motor_p = nullptr;  // Base claw (ID 5)
+GM6020Functions   * gm6020_motor_p  = nullptr;  // Small claw (ID 7)
+M3508Functions    * s_m3508_claw_p  = nullptr;  // Medium (ID 5)
+DMJ4310Functions  * dmj4310_motor_p = nullptr;  // Base claw (ID 5)
 
 // Store last received ID for debugging
 static volatile uint16_t s_lastCanId = 0;
@@ -87,12 +88,35 @@ extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxF
       case 0x204:  // M3508 motor 4
         if (motor_r_b_p) motor_r_b_p->readMotorFeedback(rxData);
         break;
-      case 0x209:  // DMJ4310 base claw (ID 5 → CAN ID 0x205+4 = 0x209)
-        if (dmj4310_motor_p) dmj4310_motor_p->ReadMotorFeedback(rxData);
+      case 0x205:  // M3508 motor 4
+        if (s_m3508_claw_p) s_m3508_claw_p->readMotorFeedback(rxData);
         break;
-      case 0x20B:  // GM6020 small claw (ID 7 → CAN ID 0x205+6 = 0x20B)
+      
+      // DMJ4310 feedback on Master ID (default 0)
+      case 0x000:  // Master ID = 0 (FACTORY DEFAULT)
+      case 0x001:  // Master ID = 1
+      case 0x002:  // Master ID = 2
+      case 0x003:  // Master ID = 3
+      case 0x004:  // Master ID = 4
+      case 0x005:  // Master ID = 5
+      case 0x006:  // Master ID = 6
+      case 0x007:  // Master ID = 7
+        if (dmj4310_motor_p) {
+          dmj4310_motor_p->readMotorFeedback(rxData);
+        }
+        break;
+      
+      // GM6020 feedback IDs: 0x205-0x20B for motor IDs 1-7
+      case 0x206:  // GM6020 motor ID 2
+      case 0x207:  // GM6020 motor ID 3
+      case 0x208:  // GM6020 motor ID 4
+      case 0x209:  // GM6020 motor ID 5
+      case 0x20A:  // GM6020 motor ID 6
+      case 0x20B:  // GM6020 motor ID 7 (small claw)
         if (gm6020_motor_p) gm6020_motor_p->readMotorFeedback(rxData);
         break;
+      default:
+        break; // Unhandled CAN ID
     }
   }
 }
@@ -110,12 +134,6 @@ void updateERTask(void *pvPara) {
   (void)pvPara;
   
   while (true) {
-    // 获取最新的UART接收数据
-    //received_data = g_uart.getReceivedValue();
-
-    // 根据接收到的数据切换状态
-    er_status_control_p->switchState(g_uart.getReceivedValue());
-
     // Debug: indicate state with LEDs
     // LED1 ON = data valid, OFF = invalid
     if (g_uart.isDataValid()) {
@@ -124,36 +142,13 @@ void updateERTask(void *pvPara) {
       HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
     }
 
-    // 执行当前状态对应的操作 (chassis control)
-    switch (er_status_control_p->current_state) {
-      case ERStatusControl::IDLE:
-        er_status_control_p->idleMode();
-        break;
-      case ERStatusControl::MANUAL:
-        er_status_control_p->manualMode(g_uart.getReceivedValue());
-        break;
-      case ERStatusControl::GOLD:
-        er_status_control_p->goldMode();
-        break;
-      case ERStatusControl::MINING:
-        er_status_control_p->miningMode(g_uart.getReceivedValue());
-        break;
-      case ERStatusControl::DEPOSIT:
-        // er_status_control_p->depositMode();
-        break;
-      case ERStatusControl::ERROR:
-        er_status_control_p->idleMode();
-        break;
-    }
+    // Update wheel state based on UART
+    er_status_control_p->switchState(g_uart.getReceivedValue());
+    // Update wheel motors
+    er_status_control_p->update(g_uart.getReceivedValue());
     
-    // Update claw state based on channel 9
-    const uartdriver::ReceivedValue& uart_data = g_uart.getReceivedValue();
-    if (uart_data.channel_9 > 1500) {
-        er_claw_control_p->setState(ERClawControl::ClawState::IDLE);
-    } else {
-        er_claw_control_p->setState(ERClawControl::ClawState::CLASP);
-    }
-    
+    // Update claw state based on UART
+    er_claw_control_p->switchState(g_uart.getReceivedValue());
     // Update claw motors
     er_claw_control_p->update();
     
@@ -179,9 +174,12 @@ void startUserTasks() {
 
   // Initialize claw motors
   static DMJ4310Functions s_dmj4310_base(5, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x205, 0x20B);
-  static GM6020Functions s_gm6020_small(7, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x205, 0x20B);
+  static GM6020Functions  s_gm6020_small(7, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x205, 0x20B);
+  static M3508Functions   s_m3508_claw  (5, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x205, 0x208);
+  
   dmj4310_motor_p = &s_dmj4310_base;
   gm6020_motor_p = &s_gm6020_small;
+  s_m3508_claw_p = &s_m3508_claw;
 
   // Initialize chassis control (4 M3508 motors)
   static ERStatusControl s_er_status_control(
@@ -191,8 +189,8 @@ void startUserTasks() {
   );
   er_status_control_p = &s_er_status_control;
   
-  // Initialize claw control (DMJ4310 + GM6020)
-  static ERClawControl s_er_claw_control(s_dmj4310_base, s_gm6020_small);
+  // Initialize claw control (DMJ4310 + GM6020 + M3508)
+  static ERClawControl s_er_claw_control(s_dmj4310_base, s_gm6020_small, s_m3508_claw);
   er_claw_control_p = &s_er_claw_control;
 
   // Configure FDCAN filter, callbacks, and start
@@ -216,6 +214,9 @@ void startUserTasks() {
   HAL_FDCAN_RegisterErrorStatusCallback(&hfdcan1, FDCAN1_ErrorStatusCallback);
   HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
   HAL_FDCAN_Start(&hfdcan1);
+  
+  // NOTE: Cannot call vTaskDelay here - scheduler not started yet!
+  // Motor enable commands will be sent from the ER task instead
 
   // Create UART task
   xTaskCreateStatic(uartTask, "UART_Task", configMINIMAL_STACK_SIZE * 8, NULL, 3,

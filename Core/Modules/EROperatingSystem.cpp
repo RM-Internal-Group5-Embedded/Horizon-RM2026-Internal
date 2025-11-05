@@ -11,7 +11,6 @@ ERStatusControl::ERStatusControl(M3508Functions& motor_front_left, M3508Function
     this->manual_control.gm6020_claw = gm6020_claw;
     lengthX = lengthx;
     lengthY = lengthy;
-    current_state_claw = ERState_Claw::IDLE;
     
     // Initialize shared TX header once (for 0x200)
     motor_tx_header.Identifier = 0x200;
@@ -42,13 +41,6 @@ void ERStatusControl::switchState(const uartdriver::ReceivedValue& received_data
         current_state = MINING;
         }
     }
-    
-    if(received_data.channel_9 > 1500) {
-        current_state_claw = ERState_Claw::IDLE;
-    } else {
-        current_state_claw = ERState_Claw::CLASP;
-    }
-    
 }
 
 void ERStatusControl::goldMode(){
@@ -75,11 +67,6 @@ void ERStatusControl::manualMode(const uartdriver::ReceivedValue& received_data)
 void ERStatusControl::miningMode(const uartdriver::ReceivedValue& received_data) {
     traversal(received_data.channel_1, received_data.channel_2, received_data.channel_4, 300, 100);
     
-}
-
-void ERStatusControl::claspMode(const uartdriver::ReceivedValue& received_data) {
-    // Placeholder for clasp control logic
-    (void)received_data;
 }
 
 //Relative directional control
@@ -137,43 +124,26 @@ void ERStatusControl::traversal( uint16_t joystick_r_x, uint16_t joystick_r_y,
     sendMotorCurrents(curr_lf, curr_rf, curr_lb, curr_rb);
 }
 
-void ERStatusControl::updateClaw() {
-    if (!manual_control.gm6020_claw) return;
-    
-    // Set reference position on first call (defines "rest" as current position)
-    static bool initialized = false;
-    if (!initialized) {
-        manual_control.gm6020_claw->setReferencePosition();
-        initialized = true;
-    }
-    
-    // Get current absolute position from rest
-    float current_absolute = manual_control.gm6020_claw->getAbsoluteDegrees();
-    
-    // Button-triggered 720 degree rotation
-    static bool button_was_pressed = false;
-    static float target_absolute = 0.0f;
-    
-    // Control based on claw state
-    switch (current_state_claw) {
-        case ERState_Claw::CLASP:
-            // Check if button was just pressed
-            if (!button_was_pressed) {
-                // Trigger 720 degree rotation from current position
-                target_absolute = current_absolute + 720.0f;
-                button_was_pressed = true;
-            }
-            // Move to target (PID will handle getting there)
-            manual_control.gm6020_claw->setAngle(target_absolute);
+void ERStatusControl::update(const uartdriver::ReceivedValue& received_data) {
+    // Call appropriate mode method based on current state
+    switch (current_state) {
+        case IDLE:
+            idleMode();
             break;
-            
-        case ERState_Claw::RELEASE:
-        case ERState_Claw::IDLE:
-        default:
-            // Return to rest position (0 degrees from reference)
-            target_absolute = 0.0f;
-            manual_control.gm6020_claw->setAngle(target_absolute);
-            button_was_pressed = false;  // Reset for next press
+        case MANUAL:
+            manualMode(received_data);
+            break;
+        case GOLD:
+            goldMode();
+            break;
+        case MINING:
+            miningMode(received_data);
+            break;
+        case DEPOSIT:
+            // depositMode();
+            break;
+        case ER_ERROR:
+            idleMode();
             break;
     }
 }
@@ -199,32 +169,77 @@ void ERStatusControl::sendMotorCurrents(int16_t curr_lf, int16_t curr_rf, int16_
 // ========== ERClawControl Implementation ==========
 
 ERClawControl::ERClawControl(DMJ4310Functions& base_motor, GM6020Functions& small_motor) {
-    base_claw = &base_motor;
-    small_claw = &small_motor;
+    claw_motors.base_claw = &base_motor;
+    claw_motors.small_claw = &small_motor;
+    claw_motors.m3508_claw = nullptr;
     current_state = ClawState::IDLE;
     
-    // Initialize TX header for claw motors (0x2FF for GM6020 motors 5-7)
-    claw_tx_header.Identifier = 0x2FF;
-    claw_tx_header.IdType = FDCAN_STANDARD_ID;
-    claw_tx_header.TxFrameType = FDCAN_DATA_FRAME;
-    claw_tx_header.DataLength = FDCAN_DLC_BYTES_8;
-    claw_tx_header.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
-    claw_tx_header.BitRateSwitch = FDCAN_BRS_OFF;
-    claw_tx_header.FDFormat = FDCAN_CLASSIC_CAN;
-    claw_tx_header.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
-    claw_tx_header.MessageMarker = 0;
+    // Initialize TX header for GM6020 claw motors (0x2FF for GM6020 motors 5-8)
+    gm6020_tx_header.Identifier = 0x2FF;
+    gm6020_tx_header.IdType = FDCAN_STANDARD_ID;
+    gm6020_tx_header.TxFrameType = FDCAN_DATA_FRAME;
+    gm6020_tx_header.DataLength = FDCAN_DLC_BYTES_8;
+    gm6020_tx_header.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+    gm6020_tx_header.BitRateSwitch = FDCAN_BRS_OFF;
+    gm6020_tx_header.FDFormat = FDCAN_CLASSIC_CAN;
+    gm6020_tx_header.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+    gm6020_tx_header.MessageMarker = 0;
     
-    // Set reference positions on first call
-    if (small_claw) {
-        small_claw->setReferencePosition();
-    }
+    // Initialize TX header for M3508 claw motors (0x1FF for M3508 motors 5-8)
+    m3508_tx_header.Identifier = 0x1FF;
+    m3508_tx_header.IdType = FDCAN_STANDARD_ID;
+    m3508_tx_header.TxFrameType = FDCAN_DATA_FRAME;
+    m3508_tx_header.DataLength = FDCAN_DLC_BYTES_8;
+    m3508_tx_header.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+    m3508_tx_header.BitRateSwitch = FDCAN_BRS_OFF;
+    m3508_tx_header.FDFormat = FDCAN_CLASSIC_CAN;
+    m3508_tx_header.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+    m3508_tx_header.MessageMarker = 0;
 }
 
-void ERClawControl::update() {
-    // Calculate timing
+ERClawControl::ERClawControl(DMJ4310Functions& base_motor, GM6020Functions& small_motor, M3508Functions& m3508_motor) {
+    claw_motors.base_claw = &base_motor;
+    claw_motors.small_claw = &small_motor;
+    claw_motors.m3508_claw = &m3508_motor;
+    current_state = ClawState::IDLE;
+    
+    // Initialize TX header for GM6020 claw motors (0x2FF for GM6020 motors 5-8)
+    gm6020_tx_header.Identifier = 0x2FF;
+    gm6020_tx_header.IdType = FDCAN_STANDARD_ID;
+    gm6020_tx_header.TxFrameType = FDCAN_DATA_FRAME;
+    gm6020_tx_header.DataLength = FDCAN_DLC_BYTES_8;
+    gm6020_tx_header.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+    gm6020_tx_header.BitRateSwitch = FDCAN_BRS_OFF;
+    gm6020_tx_header.FDFormat = FDCAN_CLASSIC_CAN;
+    gm6020_tx_header.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+    gm6020_tx_header.MessageMarker = 0;
+    
+    // Initialize TX header for M3508 claw motors (0x1FF for M3508 motors 5-8)
+    m3508_tx_header.Identifier = 0x1FF;
+    m3508_tx_header.IdType = FDCAN_STANDARD_ID;
+    m3508_tx_header.TxFrameType = FDCAN_DATA_FRAME;
+    m3508_tx_header.DataLength = FDCAN_DLC_BYTES_8;
+    m3508_tx_header.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+    m3508_tx_header.BitRateSwitch = FDCAN_BRS_OFF;
+    m3508_tx_header.FDFormat = FDCAN_CLASSIC_CAN;
+    m3508_tx_header.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+    m3508_tx_header.MessageMarker = 0;
+}
+
+void ERClawControl::idleMode() {
+    // Stop all claw motors
+    if (claw_motors.base_claw) {
+        claw_motors.base_claw->sendCurrent(0);
+    }
+    // Send zero to both GM6020 and M3508 claw motors
+    sendClawCurrents(0, 0);
+}
+
+void ERClawControl::claspMode() {
     static uint32_t last_time = 0;
     uint32_t current_time = HAL_GetTick();
     
+    // Reset timing on first call or after long gap
     if (last_time == 0 || (current_time - last_time) > 1000) {
         last_time = current_time;
     }
@@ -233,36 +248,103 @@ void ERClawControl::update() {
     if (dt <= 0 || dt > 0.1f) dt = 0.01f;
     last_time = current_time;
     
-    // Button-triggered 720 degree rotation for small claw
-    static bool button_was_pressed = false;
-    static float target_absolute = 0.0f;
+    // DMJ4310 base claw control
+    if (claw_motors.base_claw) {
+        //claw_motors.base_claw->sendMITCommand(1.0f, 0.0f, 50.0f, 2.0f, 0.0f);
+    }
     
+    // Calculate PID for both claw motors
+    int16_t gm6020_current = 0;
+    int16_t m3508_current = 0;
+    
+    if (claw_motors.small_claw) {
+        gm6020_current = claw_motors.small_claw->setAnglePID(720.0f, dt, false);
+    }
+    
+    if (claw_motors.m3508_claw) {
+        m3508_current = claw_motors.m3508_claw->setRpmPID(1000, dt, false);
+    }
+    
+    // Send both motors in one call
+    sendClawCurrents(gm6020_current, m3508_current);
+}
+
+void ERClawControl::releaseMode() {
+    static uint32_t last_time = 0;
+    uint32_t current_time = HAL_GetTick();
+    
+    // Reset timing on first call or after long gap
+    if (last_time == 0 || (current_time - last_time) > 1000) {
+        last_time = current_time;
+    }
+    
+    float dt = (current_time - last_time) / 1000.0f;
+    if (dt <= 0 || dt > 0.1f) dt = 0.01f;
+    last_time = current_time;
+    
+    // DMJ4310 base claw control
+    if (claw_motors.base_claw) {
+        //claw_motors.base_claw->sendMITCommand(-1.0f, 0.0f, 50.0f, 2.0f, 0.0f);
+    }
+    
+    // Calculate PID for both claw motors
+    int16_t gm6020_current = 0;
+    int16_t m3508_current = 0;
+    
+    if (claw_motors.small_claw) {
+        gm6020_current = claw_motors.small_claw->setAnglePID(0.0f, dt, false);
+    }
+    
+    if (claw_motors.m3508_claw) {
+        m3508_current = claw_motors.m3508_claw->setRpmPID(-1000, dt, false);
+    }
+    
+    // Send both motors in one call
+    sendClawCurrents(gm6020_current, m3508_current);
+}
+
+void ERClawControl::switchState(const uartdriver::ReceivedValue& received_data) {
+    if (received_data.channel_9 < 500) {
+        current_state = ClawState::IDLE;
+    } else if (received_data.channel_9 == 1024) {
+        current_state = ClawState::RELEASE;
+    } else {
+        current_state = ClawState::CLASP;
+    }
+}
+
+void ERClawControl::update() {
+    // Call appropriate mode method based on current state
     switch (current_state) {
-        case ClawState::CLASP:
-            // Check if button was just pressed
-            if (!button_was_pressed) {
-                // Trigger 720 degree rotation from current position
-                if (small_claw) {
-                    float current_absolute = small_claw->getAbsoluteDegrees();
-                    target_absolute = current_absolute + 720.0f;
-                }
-                button_was_pressed = true;
-            }
-            // Move to target
-            if (small_claw) {
-                small_claw->setAngle(target_absolute);
-            }
-            break;
-            
-        case ClawState::RELEASE:
         case ClawState::IDLE:
-        default:
-            // Return to rest position (0 degrees from reference)
-            target_absolute = 0.0f;
-            if (small_claw) {
-                small_claw->setAngle(target_absolute);
-            }
-            button_was_pressed = false;  // Reset for next press
+            idleMode();
             break;
+        case ClawState::CLASP:
+            claspMode();
+            break;
+        case ClawState::RELEASE:
+            releaseMode();
+            break;
+        default:
+            idleMode();
+            break;
+    }
+}
+
+void ERClawControl::sendClawCurrents(int16_t gm6020_current, int16_t m3508_current) {
+    extern FDCAN_HandleTypeDef hfdcan1;
+    
+    // Send GM6020 message on 0x2FF (for motor IDs 5-8)
+    if (claw_motors.small_claw) {
+        uint8_t gm6020_data[8] = {0};
+        claw_motors.small_claw->packCurrentIntoData(gm6020_data, gm6020_current);
+        HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &gm6020_tx_header, gm6020_data);
+    }
+    
+    // Send M3508 message on 0x1FF (for motor IDs 5-8)
+    if (claw_motors.m3508_claw) {
+        uint8_t m3508_data[8] = {0};
+        claw_motors.m3508_claw->packCurrentIntoData(m3508_data, m3508_current);
+        HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &m3508_tx_header, m3508_data);
     }
 }

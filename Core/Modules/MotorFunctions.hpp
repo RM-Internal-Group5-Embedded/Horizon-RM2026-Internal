@@ -45,7 +45,7 @@ public:
     
     virtual void readMotorFeedback(uint8_t rxData[8]);
 
-    void sendCurrent(int16_t current);
+    virtual void sendCurrent(int16_t current);
 
     void controlLoop(int choice, uint16_t magnitude);
 
@@ -68,7 +68,7 @@ class M3508Functions : public MotorFunctions {
                             pFDCAN_ErrorStatusCallbackTypeDef errorCallback,
                             uint16_t filterID2, uint16_t filterID1);
 
-    void readMotorFeedback(uint8_t rxData[8]);
+    void readMotorFeedback(uint8_t rxData[8]) override;
 
     void rotationControlLoop(int choice, uint16_t magnitude);
 
@@ -81,7 +81,7 @@ class MG90SFunctions : public MotorFunctions {
                             pFDCAN_ErrorStatusCallbackTypeDef errorCallback,
                             uint16_t filterID2, uint16_t filterID1); 
 
-    void readMotorFeedback(uint8_t rxData[8]);
+    void readMotorFeedback(uint8_t rxData[8]) override;
 };
 
 class JGA25370Functions : public MotorFunctions {
@@ -90,42 +90,69 @@ class JGA25370Functions : public MotorFunctions {
                             pFDCAN_ErrorStatusCallbackTypeDef errorCallback,
                             uint16_t filterID2, uint16_t filterID1); 
 
-    void readMotorFeedback(uint8_t rxData[8]);
+    void readMotorFeedback(uint8_t rxData[8]) override;
 };
 
 class DMJ4310Functions : public MotorFunctions {
-    public:
+private:
+    // MIT protocol parameter ranges (can be configured via debug assistant)
+    float p_min = -12.5f;   // Default position range
+    float p_max = 12.5f;
+    float v_min = -45.0f;   // Default velocity range (rad/s)
+    float v_max = 45.0f;
+    float t_min = -18.0f;   // Default torque range (Nm)
+    float t_max = 18.0f;
+    
+public:
+    // Error code from feedback (0=no error, 8-E=various errors)
+    uint8_t error_code = 0;
+    
     DMJ4310Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callback, 
                             pFDCAN_ErrorStatusCallbackTypeDef errorCallback,
                             uint16_t filterID2, uint16_t filterID1); 
 
-    void ReadMotorFeedback(uint8_t rxData[8]);
+    void readMotorFeedback(uint8_t rxData[8]) override;
+    
+    // DMJ4310 uses MIT control protocol
+    void sendCurrent(int16_t current) override;
+    
+    // MIT protocol: send position, velocity, Kp, Kd, and torque feedforward
+    void sendMITCommand(float p_des, float v_des, float kp, float kd, float t_ff);
+    
+    // Enable/disable motor (must enable before use)
+    void enableMotor();
+    void disableMotor();
+    
+    // Zero the motor position (set current position as zero)
+    void zeroPosition();
+    
+    // Try enabling with different motor IDs (broadcast-like behavior)
+    void enableMotorBroadcast();
+    
+    // Set parameter ranges (must match motor configuration)
+    void setRanges(float p_min, float p_max, float v_min, float v_max, float t_min, float t_max);
+    
+    // Check for errors (returns true if error exists)
+    bool hasError() const { return error_code != 0; }
+    
+    // Get error description
+    const char* getErrorString() const;
+    
+private:
+    // Helper functions to encode/decode MIT protocol
+    uint16_t floatToUint(float x, float x_min, float x_max, int bits);
+    float uintToFloat(uint16_t x_int, float x_min, float x_max, int bits);
 };
 
 class GM6020Functions : public MotorFunctions {
 private:
-    bool reference_set = false;
-    int32_t reference_counts = 0;  // Position when motor was first powered on
-    int32_t absolute_counts = 0;   // Total counts from reference
-    
-public:
+    public:
+    bool initialized = false;
     GM6020Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callback, 
                             pFDCAN_ErrorStatusCallbackTypeDef errorCallback,
                             uint16_t filterID2, uint16_t filterID1);
 
     void readMotorFeedback(uint8_t rxData[8]) override;
-    
-    // Get total rotation in degrees from reference position (rest position)
-    float getAbsoluteDegrees() const {
-        return (float)absolute_counts * 360.0f / 8191.0f;
-    }
-    
-    // Reset current position as the new reference (rest position)
-    void setReferencePosition() {
-        reference_set = true;
-        reference_counts = total_motor_counts;
-        absolute_counts = 0;
-    }
 };
 
 #endif // MOTORFUNCTIONS_HPP

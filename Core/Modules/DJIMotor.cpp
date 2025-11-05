@@ -79,13 +79,30 @@ FDCAN_TxHeaderTypeDef getTxHeader(uint8_t id, MotorType type) {
     
     switch(type) {
         case MotorType::GM6020:
-            txHeader.Identifier = 0x1FF;  // For GM6020 motors 1-4
-            if (id >= 5) {
-                txHeader.Identifier = 0x2FF;  // For GM6020 motors 5-8
+            // GM6020 motors: IDs 1-4 use 0x1FF, IDs 5-8 use 0x2FF
+            if (id >= 1 && id <= 4) {
+                txHeader.Identifier = 0x1FF;  // Motors 1-4
+            } else if (id >= 5 && id <= 8) {
+                txHeader.Identifier = 0x2FF;  // Motors 5-8
+            } else {
+                txHeader.Identifier = 0x1FF;  // Default fallback
             }
             break;
         case MotorType::M3508:
-            txHeader.Identifier = 0x200;
+            // M3508 motors: IDs 1-4 use 0x200, IDs 5-8 use 0x1FF
+            if (id >= 1 && id <= 4) {
+                txHeader.Identifier = 0x200;  // Motors 1-4 (feedback 0x201-0x204)
+            } else if (id >= 5 && id <= 8) {
+                txHeader.Identifier = 0x1FF;  // Motors 5-8 (feedback 0x205-0x208)
+            } else {
+                txHeader.Identifier = 0x200;  // Default fallback
+            }
+            break;
+        case MotorType::DMJ4310:
+            // DMJ4310 MIT Mode: TX = motor's CAN_ID directly
+            // The CAN_ID must be configured via debug assistant
+            // Default is usually the motor ID (1-8)
+            txHeader.Identifier = id;  // Send to motor's CAN_ID directly
             break;
         default:
             txHeader.Identifier = 0x200;
@@ -119,12 +136,12 @@ void init(pFDCAN_RxFifo0CallbackTypeDef callback,
 void constructTxData(uint8_t data[8], const uint8_t id, const int16_t current) {
     memset(data, 0, 8);
     if (id >= 1 && id <= 4) {
-        // Motors 1-4 use CAN ID 0x1FF
+        // Motors 1-4 (offset 0-3 in data array)
         uint8_t byte_offset = (id - 1) * 2;
         data[byte_offset] = (current >> 8) & 0xFF;
         data[byte_offset + 1] = current & 0xFF;
     } else if (id >= 5 && id <= 8) {
-        // Motors 5-8 use CAN ID 0x2FF  
+        // Motors 5-8 (offset 0-3 in data array, subtract 5)
         uint8_t byte_offset = (id - 5) * 2;
         data[byte_offset] = (current >> 8) & 0xFF;
         data[byte_offset + 1] = current & 0xFF;
