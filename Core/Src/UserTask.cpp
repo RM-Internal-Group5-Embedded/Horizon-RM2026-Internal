@@ -12,27 +12,60 @@
 #include "gpio.h"
 #include "main.h"
 #include "task.h"
-#include "uart.hpp"  // 包含您的UART驱动头文件
+#include "jc24btran.hpp"  // JC24B数据收发模块
 
 
-// 全局UART实例
-uartdriver::Uart g_uart;
 
-// 任务栈和控制块
-// UART任务栈 - 需要处理复杂的数据结构和DMA操作，使用更大的栈
-StackType_t uxUartTaskStack[configMINIMAL_STACK_SIZE * 8];  // 1024字节栈
-StaticTask_t xUartTaskTCB;
-// UART任务函数 - 负责UART初始化和心跳检查
-void uartTask(void *pvPara) {
-  // 初始化UART
-  g_uart.init();
+// JC24B 数据收发实例
+jc24b::DataTransceiver g_transceiver;
+
+
+// Transceiver任务栈 - 用于JC24B数据收发
+StackType_t uxTransceiverTaskStack[configMINIMAL_STACK_SIZE * 4];  // 512字节栈
+StaticTask_t xTransceiverTaskTCB;
+
+
+// Transceiver任务函数 - 负责JC24B数据收发和连接管理
+void transceiverTask(void *pvPara) {
+  // 初始化 DataTransceiver（使用 USART2）
+  g_transceiver.init(&huart2);
+  
+  for(int i = 0; i < 3; i++) {
+    HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);
+    vTaskDelay(pdMS_TO_TICKS(200));
+    HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
+    vTaskDelay(pdMS_TO_TICKS(200));
+  }
+  
+  uint8_t positions[4] = {0};
+  uint32_t loop_count = 0;
   
   while (true) {
-    // 检查心跳（这个方法需要在循环中定期调用）
-    g_uart.checkHeartbeat();
+    loop_count++;
+    if (loop_count % 20 == 0) {  // 50ms * 20 = 1秒
+     HAL_GPIO_TogglePin(LED0_GPIO_Port, LED0_Pin);
+    }
     
-    // 延时，避免任务占用过多CPU
-    vTaskDelay(pdMS_TO_TICKS(50));  // 50ms延时，心跳检查不需要太频繁
+    // 主循环处理（检查看门狗超时）
+    g_transceiver.process();
+    
+    if (g_transceiver.getPositions(positions)) {
+      HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);
+      
+      if (positions[0] == 1) {
+        HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_SET);
+      } else {
+        HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_RESET);
+      }
+      
+    } else {
+      HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
+      HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_RESET);
+      
+      // TODO: 在此位置停止电机以确保安全
+    }
+    
+    vTaskDelay(pdMS_TO_TICKS(50));  // 50ms延时
   }
 }
 
@@ -41,9 +74,10 @@ void uartTask(void *pvPara) {
  * @todo  Add your own task in this file
  */
 void startUserTasks() {
-  // 创建UART处理任务 - 高优先级，负责UART通信和心跳检查
-  xTaskCreateStatic(uartTask, "UART_Task", configMINIMAL_STACK_SIZE * 8, NULL, 3,
-                    uxUartTaskStack, &xUartTaskTCB);
+  
+  // 创建Transceiver任务 - 中高优先级，负责JC24B数据收发和连接管理
+  xTaskCreateStatic(transceiverTask, "Transceiver_Task", configMINIMAL_STACK_SIZE * 4, NULL, 4,
+                    uxTransceiverTaskStack, &xTransceiverTaskTCB);
   
   /**
    * @todo Add your own task here
