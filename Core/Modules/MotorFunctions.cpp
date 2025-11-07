@@ -58,6 +58,13 @@ M3508Functions::M3508Functions(int id,  pFDCAN_RxFifo0CallbackTypeDef callback,
     RPM_KI = 0.1f;
     RPM_KD = 2.0f;
     MAX_CURRENT = 20000;
+
+    if(id>4){
+        RPM_KP = 20.0f;
+        RPM_KI = 0.1f;
+        RPM_KD = 2.0f;
+        MAX_CURRENT = 4000;
+    }
 }
 
 // Provide a base virtual method implementation so the vtable is emitted
@@ -88,6 +95,10 @@ void M3508Functions::readMotorFeedback(uint8_t rxData[8]) {
     motor_feedback.frequency = 
         1000.0f / (current - motor_feedback.last_update);
     // Handle wrap-around to track total motor rotation
+    if(!initialized){
+        initialized = true;
+        prev_angle = current_angle;
+    }
     int16_t angle_diff = current_angle - prev_angle;
     if (angle_diff < -4000) {
         // Positive wrap: 8191 → 0
@@ -114,14 +125,26 @@ void M3508Functions::readMotorFeedback(uint8_t rxData[8]) {
     float total_motor_revs = (float)total_motor_counts / 8191.0f;
     float top_shaft_revs = total_motor_revs * (187.0f / 3591.0f);
     
-    motor_feedback.top_shaft_angle = (fmodf(top_shaft_revs * 360.0f, 360.0f)>180) ? 
-        (fmodf(top_shaft_revs * 360.0f, 360.0f)-360.0f) : 
-        fmodf(top_shaft_revs * 360.0f, 360.0f);
+    motor_feedback.top_shaft_angle = top_shaft_revs*360;
 }
 
 void MotorFunctions::sendCurrent(int16_t current) {
+    // Debug: Store last sent data for inspection
+    static volatile int16_t s_last_motor_id = 0;
+    static volatile int16_t s_last_current = 0;
+    static volatile uint8_t s_last_tx_data[8] = {0};
+    
+    s_last_motor_id = motor_id;
+    s_last_current = current;
+    
     // Construct TX data and send directly
     Modules::DJIMotors::constructTxData(data, motor_id, current);
+    
+    // Store data for debugging
+    for (int i = 0; i < 8; i++) {
+        s_last_tx_data[i] = data[i];
+    }
+    
     Modules::DJIMotors::send(&txHeader, data);
 }
 
@@ -451,14 +474,16 @@ GM6020Functions::GM6020Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callback,
                                  : MotorFunctions(id, callback, errorCallback) {
     // GM6020 uses CAN IDs 0x205-0x20B (for motors 1-7)
     // GM6020 motors (ID 5-8)
+    motor_id = 7;
     filter = Modules::DJIMotors::getFilter(0x205, 0x208); // Receive 0x205-0x208
     txHeader = Modules::DJIMotors::getTxHeader(id, Modules::DJIMotors::MotorType::GM6020);
-    // GM6020 uses VOLTAGE control (not current!) - range is ±30000
-    // PID values for angle control
-    RPM_KP = 100.0f;     // Moderate proportional for angle
-    RPM_KI = 0.5f;       // Small integral to prevent windup
-    RPM_KD = 50.0f;      // Derivative for damping
-    MAX_CURRENT = 25000; // GM6020 voltage limit (±30000 max)
+    // GM6020 in current mode - uses voltage command format but interprets as current
+    // Command range is still ±25000 (voltage range) but represents current
+    // PID values for angle control (tuned to prevent overshoot/oscillation)
+    RPM_KP = 30.0f;      // Reduced proportional gain to prevent overshoot
+    RPM_KI = 0.01f;      // Very small integral to prevent windup
+    RPM_KD = 0.5f;       // Reduced derivative for smooth damping
+    MAX_CURRENT = 8000;  // Reduced current limit for smoother control
 }
 
 void GM6020Functions::readMotorFeedback(uint8_t rxData[8]) {

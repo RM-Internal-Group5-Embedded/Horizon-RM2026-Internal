@@ -116,20 +116,29 @@ void init(pFDCAN_RxFifo0CallbackTypeDef callback,
     pFDCAN_ErrorStatusCallbackTypeDef errorCallback, 
     FDCAN_FilterTypeDef* filter) {
     // Configure filter
+    // Configure filter
     if (HAL_FDCAN_ConfigFilter(&hfdcan1, filter) != HAL_OK) {
         Error_Handler();
     }
+    
     // Configure global filter
     HAL_FDCAN_ConfigGlobalFilter(&hfdcan1, 
                                 FDCAN_ACCEPT_IN_RX_FIFO0, 
                                 FDCAN_REJECT, 
                                 FDCAN_FILTER_REMOTE, 
                                 FDCAN_FILTER_REMOTE);
+    
     // Activate notification
-    HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
+    HAL_FDCAN_ActivateNotification(&hfdcan1, 
+                                  FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 
+                                  0);
     
     // Register callbacks
+    
     HAL_FDCAN_RegisterRxFifo0Callback(&hfdcan1, callback);
+    
+    
+    
     HAL_FDCAN_RegisterErrorStatusCallback(&hfdcan1, errorCallback);
 }
 

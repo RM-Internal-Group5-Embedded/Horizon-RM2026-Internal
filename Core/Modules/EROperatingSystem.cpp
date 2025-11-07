@@ -44,8 +44,8 @@ void ERStatusControl::switchState(const uartdriver::ReceivedValue& received_data
 }
 
 void ERStatusControl::goldMode(){
-    traversal(1024, 1807, 0, 100, 30);
-    
+    //traversal(1024, 1807, 1024, 100, 30);
+    traversal(1024, 1024, 1024, 100, 30);
 }
 
 void ERStatusControl::idleMode() {
@@ -150,20 +150,47 @@ void ERStatusControl::update(const uartdriver::ReceivedValue& received_data) {
 
 void ERStatusControl::sendMotorCurrents(int16_t curr_lf, int16_t curr_rf, int16_t curr_lb, int16_t curr_rb) {
     extern FDCAN_HandleTypeDef hfdcan1;
-    uint8_t data[8] = {0}; // Zero initialize
+    uint8_t data[8];
     
-    // Use motor class methods to pack each current into data array
-    if (manual_control.motor_front_left)
-        manual_control.motor_front_left->packCurrentIntoData(data, curr_lf);
-    if (manual_control.motor_front_right)
-        manual_control.motor_front_right->packCurrentIntoData(data, curr_rf);
-    if (manual_control.motor_back_left)
-        manual_control.motor_back_left->packCurrentIntoData(data, curr_lb);
-    if (manual_control.motor_back_right)
-        manual_control.motor_back_right->packCurrentIntoData(data, curr_rb);
+    // Debug: Store last sent currents AND raw data for inspection
+    static volatile int16_t s_last_curr_lf = 0;
+    static volatile int16_t s_last_curr_rf = 0;
+    static volatile int16_t s_last_curr_lb = 0;
+    static volatile int16_t s_last_curr_rb = 0;
+    static volatile uint8_t s_last_data[8] = {0};
+    s_last_curr_lf = curr_lf;
+    s_last_curr_rf = curr_rf;
+    s_last_curr_lb = curr_lb;
+    s_last_curr_rb = curr_rb;
     
-    // Send using pre-initialized TX header
-    HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &motor_tx_header, data);
+    // Manually pack all 4 motors into the data array
+    // Motor 1 (front-left) → bytes 0-1
+    data[0] = (curr_lf >> 8) & 0xFF;
+    data[1] = curr_lf & 0xFF;
+    
+    // Motor 2 (front-right) → bytes 2-3
+    data[2] = (curr_rf >> 8) & 0xFF;
+    data[3] = curr_rf & 0xFF;
+    
+    // Motor 3 (back-left) → bytes 4-5
+    data[4] = (curr_lb >> 8) & 0xFF;
+    data[5] = curr_lb & 0xFF;
+    
+    // Motor 4 (back-right) → bytes 6-7
+    data[6] = (curr_rb >> 8) & 0xFF;
+    data[7] = curr_rb & 0xFF;
+    
+    // Store data for debugging
+    for (int i = 0; i < 8; i++) {
+        s_last_data[i] = data[i];
+    }
+    
+    // Send using pre-initialized TX header (0x200)
+    // Check if TX FIFO has space before sending
+    uint32_t freeFifoLevel = HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan1);
+    if (freeFifoLevel > 0) {
+        HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &motor_tx_header, data);
+    }
 }
 
 // ========== ERClawControl Implementation ==========
@@ -174,8 +201,8 @@ ERClawControl::ERClawControl(DMJ4310Functions& base_motor, GM6020Functions& smal
     claw_motors.m3508_claw = nullptr;
     current_state = ClawState::IDLE;
     
-    // Initialize TX header for GM6020 claw motors (0x2FF for GM6020 motors 5-8)
-    gm6020_tx_header.Identifier = 0x2FF;
+    // Initialize TX header for GM6020 claw motors in CURRENT mode (0x2FE for motors 5-7)
+    gm6020_tx_header.Identifier = 0x2FE;  // Current mode uses 0x2FE (not 0x2FF)
     gm6020_tx_header.IdType = FDCAN_STANDARD_ID;
     gm6020_tx_header.TxFrameType = FDCAN_DATA_FRAME;
     gm6020_tx_header.DataLength = FDCAN_DLC_BYTES_8;
@@ -184,6 +211,9 @@ ERClawControl::ERClawControl(DMJ4310Functions& base_motor, GM6020Functions& smal
     gm6020_tx_header.FDFormat = FDCAN_CLASSIC_CAN;
     gm6020_tx_header.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
     gm6020_tx_header.MessageMarker = 0;
+    
+    // IMPORTANT: Update the actual GM6020 motor's txHeader to match
+    small_motor.setTxHeader(gm6020_tx_header);
     
     // Initialize TX header for M3508 claw motors (0x1FF for M3508 motors 5-8)
     m3508_tx_header.Identifier = 0x1FF;
@@ -203,8 +233,8 @@ ERClawControl::ERClawControl(DMJ4310Functions& base_motor, GM6020Functions& smal
     claw_motors.m3508_claw = &m3508_motor;
     current_state = ClawState::IDLE;
     
-    // Initialize TX header for GM6020 claw motors (0x2FF for GM6020 motors 5-8)
-    gm6020_tx_header.Identifier = 0x2FF;
+    // Initialize TX header for GM6020 claw motors in CURRENT mode (0x2FE for motors 5-7)
+    gm6020_tx_header.Identifier = 0x2FE;  // Current mode uses 0x2FE (not 0x2FF)
     gm6020_tx_header.IdType = FDCAN_STANDARD_ID;
     gm6020_tx_header.TxFrameType = FDCAN_DATA_FRAME;
     gm6020_tx_header.DataLength = FDCAN_DLC_BYTES_8;
@@ -213,6 +243,9 @@ ERClawControl::ERClawControl(DMJ4310Functions& base_motor, GM6020Functions& smal
     gm6020_tx_header.FDFormat = FDCAN_CLASSIC_CAN;
     gm6020_tx_header.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
     gm6020_tx_header.MessageMarker = 0;
+    
+    // IMPORTANT: Update the actual GM6020 motor's txHeader to match
+    small_motor.setTxHeader(gm6020_tx_header);
     
     // Initialize TX header for M3508 claw motors (0x1FF for M3508 motors 5-8)
     m3508_tx_header.Identifier = 0x1FF;
@@ -224,6 +257,9 @@ ERClawControl::ERClawControl(DMJ4310Functions& base_motor, GM6020Functions& smal
     m3508_tx_header.FDFormat = FDCAN_CLASSIC_CAN;
     m3508_tx_header.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
     m3508_tx_header.MessageMarker = 0;
+    
+    // IMPORTANT: Update the actual M3508 motor's txHeader to match
+    m3508_motor.setTxHeader(m3508_tx_header);
 }
 
 void ERClawControl::idleMode() {
@@ -248,21 +284,32 @@ void ERClawControl::claspMode() {
     if (dt <= 0 || dt > 0.1f) dt = 0.01f;
     last_time = current_time;
     
+    int16_t gm6020_current = 0;
+    int16_t m3508_current = 0;
+    
+    // Debug: store angle info
+    static volatile float s_gm6020_current_angle = 0;
+    static volatile float s_gm6020_target_angle = 0;
+    static volatile int16_t s_gm6020_rpm = 0;
+    static volatile int16_t s_gm6020_output = 0;
+    
     // DMJ4310 base claw control
     if (claw_motors.base_claw) {
         //claw_motors.base_claw->sendMITCommand(1.0f, 0.0f, 50.0f, 2.0f, 0.0f);
     }
     
-    // Calculate PID for both claw motors
-    int16_t gm6020_current = 0;
-    int16_t m3508_current = 0;
-    
     if (claw_motors.small_claw) {
+        s_gm6020_current_angle = claw_motors.small_claw->motor_feedback.top_shaft_angle;
+        s_gm6020_target_angle = 720.0f;
+        s_gm6020_rpm = claw_motors.small_claw->motor_feedback.rpm;
+        
+        // Use PID to reach 720 degrees (2 full rotations)
         gm6020_current = claw_motors.small_claw->setAnglePID(720.0f, dt, false);
+        s_gm6020_output = gm6020_current;
     }
     
     if (claw_motors.m3508_claw) {
-        m3508_current = claw_motors.m3508_claw->setRpmPID(1000, dt, false);
+        m3508_current = claw_motors.m3508_claw->setAnglePID(720.0f, dt, false);
     }
     
     // Send both motors in one call
@@ -296,7 +343,7 @@ void ERClawControl::releaseMode() {
     }
     
     if (claw_motors.m3508_claw) {
-        m3508_current = claw_motors.m3508_claw->setRpmPID(-1000, dt, false);
+        m3508_current = claw_motors.m3508_claw->setAnglePID(0.0f, dt, false);
     }
     
     // Send both motors in one call
@@ -332,19 +379,18 @@ void ERClawControl::update() {
 }
 
 void ERClawControl::sendClawCurrents(int16_t gm6020_current, int16_t m3508_current) {
-    extern FDCAN_HandleTypeDef hfdcan1;
+    // Debug: Store last sent claw currents
+    static volatile int16_t s_last_gm6020_curr = 0;
+    static volatile int16_t s_last_m3508_curr = 0;
+    s_last_gm6020_curr = gm6020_current;
+    s_last_m3508_curr = m3508_current;
     
-    // Send GM6020 message on 0x2FF (for motor IDs 5-8)
+    // Use motor's own sendCurrent method (handles all the packing internally)
     if (claw_motors.small_claw) {
-        uint8_t gm6020_data[8] = {0};
-        claw_motors.small_claw->packCurrentIntoData(gm6020_data, gm6020_current);
-        HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &gm6020_tx_header, gm6020_data);
+        claw_motors.small_claw->sendCurrent(gm6020_current);
     }
     
-    // Send M3508 message on 0x1FF (for motor IDs 5-8)
     if (claw_motors.m3508_claw) {
-        uint8_t m3508_data[8] = {0};
-        claw_motors.m3508_claw->packCurrentIntoData(m3508_data, m3508_current);
-        HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &m3508_tx_header, m3508_data);
+        claw_motors.m3508_claw->sendCurrent(m3508_current);
     }
 }

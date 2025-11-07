@@ -60,10 +60,14 @@ public:
     
     // Pack this motor's current into the data array at the correct position
     void packCurrentIntoData(uint8_t* data, int16_t current);
+    
+    // Setter for TX header (needed for ERClawControl to override TX ID)
+    void setTxHeader(const FDCAN_TxHeaderTypeDef& header) { txHeader = header; }
 };
 
 class M3508Functions : public MotorFunctions {
     public:
+    bool initialized = false;
     M3508Functions(int id,  pFDCAN_RxFifo0CallbackTypeDef callback, 
                             pFDCAN_ErrorStatusCallbackTypeDef errorCallback,
                             uint16_t filterID2, uint16_t filterID1);
