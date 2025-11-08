@@ -21,9 +21,9 @@
 #include "spi.h"  // 包含SPI头文件
 
 // ========== 手动PWM控制（已禁用，如需测试可取消注释） ==========
-// volatile uint16_t g_manual_pwm = 0;          // PWM值 (0-1000)
-// volatile uint8_t g_direction = 0;            // 方向 (0=停止, 1=正转, 2=反转)
-// volatile float g_current_speed = 0.0f;       // 当前速度(mm/s)，用于观察
+// uint16_t g_manual_pwm = 0;          // PWM值 (0-1000)
+// uint8_t g_direction = 0;            // 方向 (0=停止, 1=正转, 2=反转)
+// float g_current_speed = 0.0f;       // 当前速度(mm/s)，用于观察
 
 // 全局左电机实例
 // 使用 TIM15_CH1 (PB14/jga_left_speed) 作为PWM输出
@@ -43,7 +43,7 @@ mpu6500::MPU6500 mpu;
 arpid::AR ar(&motor_left, &encoder_left, &mpu);
 
 // 任务栈和控制块
-// AR控制任务栈
+// // AR控制任务栈
 StackType_t uxARTaskStack[configMINIMAL_STACK_SIZE * 3];  // 384字节栈
 StaticTask_t xARTaskTCB;
 
@@ -56,10 +56,10 @@ StackType_t uxMpuTaskStack[configMINIMAL_STACK_SIZE * 4];  // 512字节栈
 StaticTask_t xMpuTaskTCB;
 
 // PWM控制任务栈（已禁用，如需测试可取消注释）
-// StackType_t uxPWMTaskStack[configMINIMAL_STACK_SIZE * 2];  // 256字节栈
-// StaticTask_t xPWMTaskTCB;
+StackType_t uxPWMTaskStack[configMINIMAL_STACK_SIZE * 2];  // 256字节栈
+StaticTask_t xPWMTaskTCB;
 
-// AR控制任务函数
+// // AR控制任务函数
 void arTask(void *pvPara) {
   // 初始化电机
   motor_left.init();
@@ -142,14 +142,14 @@ void mpuTask(void *pvPara) {
 // void pwmTask(void *pvPara) {
 //   // 初始化电机
 //   motor_left.init();
-//   
+  
 //   // 更新周期
 //   const uint32_t UPDATE_PERIOD_MS = 20;  // 20ms
-//   
+  
 //   while (true) {
 //     // 更新当前速度（用于观察）
 //     g_current_speed = encoder_left.getLinearVelocity();
-//     
+    
 //     // 根据方向控制电机
 //     if (g_direction == 0) {
 //       // 停止
@@ -168,7 +168,7 @@ void mpuTask(void *pvPara) {
 //       // 无效值，停止
 //       motor_left.stop();
 //     }
-//     
+    
 //     vTaskDelay(pdMS_TO_TICKS(UPDATE_PERIOD_MS));
 //   }
 // }
@@ -182,7 +182,7 @@ void startUserTasks() {
   xTaskCreateStatic(encoderTask, "Encoder_Task", configMINIMAL_STACK_SIZE * 3, NULL, 2,
                     uxEncoderTaskStack, &xEncoderTaskTCB);
   
-  // 创建AR控制任务 - 优先级4
+  // // 创建AR控制任务 - 优先级4
   xTaskCreateStatic(arTask, "AR_Task", configMINIMAL_STACK_SIZE * 3, NULL, 4,
                     uxARTaskStack, &xARTaskTCB);
   

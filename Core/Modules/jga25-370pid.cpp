@@ -77,7 +77,7 @@ namespace arpid
         : motor_(motor)
         , encoder_(encoder)
         , mpu_(mpu)
-        , angle_pid_(20.0f, 0.0f, 10.0f)      // 角度环：Kp=20, Kd=10
+        , angle_pid_(0.0f, 0.0f, 0.0f)      // 角度环
         , velocity_pid_(0.0f, 0.0f, 0.0f)     // 速度环
         , enabled_(false)
         , target_velocity_(0.0f)
@@ -162,19 +162,34 @@ namespace arpid
     
     int16_t AR::limitMotorOutput(float output)
     {
+        const float MIN_PWM = 80.0f;    // 最小启动PWM（测试得出）
         const float MAX_PWM = 1000.0f;  // 最大PWM
-        const float DEAD_ZONE = 5.0f;   // 死区阈值（15 PWM能动，死区设小一点）
+        const float DEAD_ZONE = 70.0f;  // 死区阈值（略小于最小启动PWM）
         
         // 死区处理
         if (output > -DEAD_ZONE && output < DEAD_ZONE) {
             return 0;
         }
         
-        // 限幅
-        if (output > MAX_PWM) output = MAX_PWM;
-        if (output < -MAX_PWM) output = -MAX_PWM;
+        // PWM映射：将PID输出映射到实际可用范围
+        // PID输出范围：[-1000, 1000]
+        // 实际PWM范围：[80, 1000]（去除死区）
+        float mapped_pwm = 0;
         
-        return (int16_t)output;
+        if (output > 0) {
+            // 正转：映射到 [MIN_PWM, MAX_PWM]
+            // 线性映射：DEAD_ZONE -> MIN_PWM, MAX_PWM -> MAX_PWM
+            mapped_pwm = MIN_PWM + (output - DEAD_ZONE) * (MAX_PWM - MIN_PWM) / (MAX_PWM - DEAD_ZONE);
+        } else if (output < 0) {
+            // 反转：映射到 [-MAX_PWM, -MIN_PWM]
+            mapped_pwm = -MIN_PWM + (output + DEAD_ZONE) * (MAX_PWM - MIN_PWM) / (MAX_PWM - DEAD_ZONE);
+        }
+        
+        // 限幅
+        if (mapped_pwm > MAX_PWM) mapped_pwm = MAX_PWM;
+        if (mapped_pwm < -MAX_PWM) mapped_pwm = -MAX_PWM;
+        
+        return (int16_t)mapped_pwm;
     }
 }
 
