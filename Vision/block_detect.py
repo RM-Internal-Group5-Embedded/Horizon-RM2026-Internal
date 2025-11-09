@@ -1,95 +1,129 @@
-import cv2
+#主运行
+#检测block是否进入预先标注的4个区域
+import os
+import json
+import cv2  
 import numpy as np
-import math
 
-grey=[,,]#gray in BGR colorspace
+CONFIG_DIR = os.path.join(os.path.dirname(__file__), 'config')
+REGIONS_PATH = os.path.join(CONFIG_DIR, 'regions_view.json')
 
-#根据原有图像识别block特征点  现在一次只能识别一个
-def blockKeypoints(img,frame):
-    block=cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
-    scene=cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
-    #ORB检测器 可以修改feature数量
-    orb=cv2.ORB_create(nfeatures=2000)
-    #检测关键点 计算描述符
-    kp1,des1=orb.detectAndCompute(block,None)
-    kp2,des2=orb.detectAndCompute(scene,None)
-    #创建BFMatcher
-    bf=cv2.BFMatcher(cv2.NORM_HAMMING,True)
-    #KNN匹配
-    matches=bf.knnMatch(des1,des2,k=2)
-    #使用lowe's ratio test筛选匹配点 如果有一个明显优于另一个 那很有可能是对的
-    good_matches=[]
-    for m,n in matches:
-        if m.distance<0.75 * n.distance:
-            good_matches.append(m)
+def load_regions():
+    if not os.path.exists(REGIONS_PATH):
+        print("缺少regions_view.json文件,需要先运行define_regions.py")
+        return []
+    with open(REGIONS_PATH,'r') as f:
+        data=json.load(f)
+        return data['regions']
+        #json.dump({'regions':regions},f) 用字典存的
 
-    if len(good_matches)>=10:#检查是否有足够多的良好匹配点
-        #获取匹配点坐标
-        src_pts=np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1,1,2)
-        dst_pts=np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1,1,2)
-        #计算单应性矩阵
-        H,mask=cv2.findHomography(src_pts,dst_pts,cv2.RANSAC,5.0)
-    
-    if H is not None:
-        #获取目标图像的四个角点
-        h,w=img.shape[:2]
-        pts=np.float32([[0,0],[0,h-1],[w-1,h-1],[w-1,0]]).reshape(-1,1,2)
+def point_in_region(point,region):
+    # 1:在多边形内部，0:在多边形边上，-1:在多边形外部
+    a=cv2.pointPolygonTest(np.array(region,dtype=np.int32),(int(point[0]),int(point[1])),False)
+    return a==1
 
-        #将角点映射到场景图像中
-        dst=cv2.perspectiveTransform(pts,H)
-        # 计算方块中心位置
-        center_pt = np.mean(dst, axis=0)[0]
-        center_x, center_y = int(center_pt[0]), int(center_pt[1])
-            
-        #在场景图像中绘制目标边框 不需要可以删掉
-        cv2.polylines(scene,[np.int32(dst)],True,(0,255,0),3,cv2.LINE_AA)
+def detect_blocks(frame):#只用detect矩形边框 等下看在框定的区域中有没有完整的矩形边框
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    #通过选择的算法 自动计算阈值 图像二值化 黑底白块 比平均值亮5以上的变白色
+    binary = cv2.adaptiveThreshold(gray,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C,cv2.THRESH_BINARY_INV,31,5)
+    #去噪
+    kernel = np.ones((5, 5), np.uint8)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)#腐蚀膨胀 去白点
+    binary=cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)#膨胀腐蚀 去黑洞
 
-        return [center_x,center_y]
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)#只检测最外层轮廓 智能压缩直线上的冗余点】
+    detections=[]
+    for c in contours:
+        #面积过滤
+        area=cv2.contourArea(c)
+        if area<800:#可调整 面积必须比800大
+            continue
+        
+        #形状过滤
+        #最小的可以包裹着住边框的正方形. 左上角x,y
+        x,y,w,h=cv2.boundingRect(c)
+        if w/max(h,1)<0.5 or w/max(h,1)>2:
+            continue
 
-def findBlockContour(frame):
+        #在图像坐标系中，向下是 +y
+        detections.append({'block':(x,y,x+w,y+h),'centre':((x+w)/2,(y+h)/2)})
 
+    return binary,detections
 
+def draw_regions(img,regions):
+    for index in range(len(regions)):
+        poly=regions[index]
+        cv2.polylines(img,[np.int32(poly)],True,(0,255,0),2)
+        if len(poly)>0:
+            text='R'+chr(index+1+ord('A'))
+            #绘制字符串 画布，字符串，坐标，字体序号，缩放系数，颜色，粗细，线条类型(以下实线)
+            cv2.putText(img,text, tuple(poly[0]), cv2.FONT_HERSHEY_SIMPLEX,0.7,(0,255,0),2,1)
 
 
 def main():
-    #使用opencv调用电脑中的摄像头 需要传入摄像头的序号 到设备管理器中看
+    regions=load_regions()
+    if not regions:
+        return 
+    
     capture=cv2.VideoCapture(0)
-
     if capture.isOpened():
         print("USB相机连接成功")
     else:
         print("USB相机连接失败")
+        return 
 
-    capture.set(cv2.CAP_PROP_FRAME_HEIGHT,720)
-    capture.set(cv2.CAP_PROP_FRAME_WIDTH,1280)#设置相机采集分辨率 还要看是否支持
+    prev_inside = [False]*len(regions)  #记录上一帧每个区域是否有block
 
-    #特征提取原图
-    img=cv2.imread("")
-
-    #要循环读取每一帧的图像
     while True:
-        #读取每一帧图像
         ret,frame=capture.read()
         if not ret:
             print("无法读取视频帧")
             break
+        
+        #mask:处理后的二值图像 detections:检测到的block列表，包含位置和中心点
+        mask,detections = detect_blocks(frame)
 
-        x,y=-1,-1 #可以吗
-        #find the Block  现在一次只能找到一个
-        x,y=blockKeypoints(img,frame)
+        #画出regions区域
+        canvas=frame.copy()
+        draw_regions(canvas,regions)
+        for d in detections:
+            x1,y1,x2,y2=d['block']
+            cx,cy=d['centre']
+            #橙色矩形框:block 橙色圆点:block中心
+            cv2.rectangle(canvas,(x1,y1),(x2,y2),(0, 200, 255), 2)
+            cv2.circle(canvas,(int(cx),int(cy)), 4, (0, 200, 255), -1)
 
-        if x!=-1 and y !=-1:
-            #find where is those four block position
-            _=findBlockContour(frame)
+        #检测block中心是否在regions内
+        #本次情况
+        now_inside=[]
+        for poly in regions:
+            is_block=False
+            for d in detections:
+                if point_in_region(d['centre'],poly):
+                    is_block=True             
+            now_inside.append(is_block)
 
-        key=cv2.waitKey(1)
-        #如果输入了任意键 key的值就不等于-1
-        if key!=-1:
+        for i in range(len(regions)):
+            was_inside=prev_inside[i]
+            is_inside=now_inside[i]
+            
+            if not was_inside and is_inside:
+                print("Block 到达第", i+1 ,"个区域") #无线传输
+
+        #更新
+        prev_inside = now_inside.copy()
+        
+        #显示画面
+        cv2.imshow('view', canvas)
+        cv2.imshow('mask', mask)
+ 
+        key = cv2.waitKey(1) & 0xFF #只取键盘码
+        if key==ord('q'):
             break
 
-    #最后释放capture指针
     capture.release()
     cv2.destroyAllWindows()
 
-if __name__ == "__main__":
+
+if __name__=='__main__':
     main()
