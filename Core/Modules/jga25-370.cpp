@@ -2,8 +2,12 @@
 
 namespace jgamotor
 {
-    Jga25370::Jga25370(TIM_HandleTypeDef* _pwm_timer, uint32_t _pwm_channel)
+    Jga25370::Jga25370(TIM_HandleTypeDef* _pwm_timer, uint32_t _pwm_channel,
+                       GPIO_TypeDef* _forward_port, uint16_t _forward_pin,
+                       GPIO_TypeDef* _backward_port, uint16_t _backward_pin)
         : pwm_timer_(_pwm_timer), pwm_channel_(_pwm_channel)
+        , forward_port_(_forward_port), forward_pin_(_forward_pin)
+        , backward_port_(_backward_port), backward_pin_(_backward_pin)
     {
     }
     
@@ -22,8 +26,8 @@ namespace jgamotor
         if (_speed > 1000) _speed = 1000;
         
         // 设置方向：正转
-        HAL_GPIO_WritePin(jga_left_forward_GPIO_Port, jga_left_forward_Pin, GPIO_PIN_SET);
-        HAL_GPIO_WritePin(jga_left_backward_GPIO_Port, jga_left_backward_Pin, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(forward_port_, forward_pin_, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(backward_port_, backward_pin_, GPIO_PIN_RESET);
         
         // 设置PWM速度
         setPwm(_speed);
@@ -35,8 +39,8 @@ namespace jgamotor
         if (_speed > 1000) _speed = 1000;
         
         // 设置方向：反转
-        HAL_GPIO_WritePin(jga_left_forward_GPIO_Port, jga_left_forward_Pin, GPIO_PIN_RESET);
-        HAL_GPIO_WritePin(jga_left_backward_GPIO_Port, jga_left_backward_Pin, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(forward_port_, forward_pin_, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(backward_port_, backward_pin_, GPIO_PIN_SET);
         
         // 设置PWM速度
         setPwm(_speed);
@@ -45,8 +49,8 @@ namespace jgamotor
     void Jga25370::stop()
     {
         // 两个方向引脚都设为低
-        HAL_GPIO_WritePin(jga_left_forward_GPIO_Port, jga_left_forward_Pin, GPIO_PIN_RESET);
-        HAL_GPIO_WritePin(jga_left_backward_GPIO_Port, jga_left_backward_Pin, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(forward_port_, forward_pin_, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(backward_port_, backward_pin_, GPIO_PIN_RESET);
         // PWM设为0
         setPwm(0);
     }

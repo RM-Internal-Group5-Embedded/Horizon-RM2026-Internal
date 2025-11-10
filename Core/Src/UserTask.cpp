@@ -17,7 +17,6 @@
 #include "jga25-370pid.hpp"  // 包含AR PID控制头文件
 #include "mpu6500.hpp"  // 包含MPU6500陀螺仪驱动头文件
 #include "tim.h"  // 包含定时器头文件
-#include "comp.h"  // 包含比较器头文件
 #include "spi.h"  // 包含SPI头文件
 
 // ========== 手动PWM控制（已禁用，如需测试可取消注释） ==========
@@ -25,22 +24,43 @@
 // uint8_t g_direction = 0;            // 方向 (0=停止, 1=正转, 2=反转)
 // float g_current_speed = 0.0f;       // 当前速度(mm/s)，用于观察
 
-// 全局左电机实例
+// ========== 左电机系统 ==========
+// 左电机实例
 // 使用 TIM15_CH1 (PB14/jga_left_speed) 作为PWM输出
-jgamotor::Jga25370 motor_left(&htim15, TIM_CHANNEL_1);
+// GPIO: PB12(正转), PB10(反转)
+jgamotor::Jga25370 motor_left(&htim15, TIM_CHANNEL_1,
+                               jga_left_forward_GPIO_Port, jga_left_forward_Pin,
+                               jga_left_backward_GPIO_Port, jga_left_backward_Pin);
 
-// 全局编码器实例
-// 使用 TIM3 作为编码器输入（4倍频模式）
+// 左编码器实例
+// 使用 TIM4 作为编码器输入（4倍频模式）
 // 参数：定时器句柄, 轮子直径(mm), 编码器线数, 减速比
-// 
-// 当前配置：PC6(A相)→TIM3_CH1, PA3→COMP2→TIM3_CH2（4倍频）
-jgaencoder::Jga25370Encoder encoder_left(&htim3, 84.0f, 11, 34.0f);
+// 当前配置：PA11(A相)→TIM4_CH1, PA12(B相)→TIM4_CH2（4倍频）
+jgaencoder::Jga25370Encoder encoder_left(&htim4, 84.0f, 11, 34.0f);
 
+// ========== 右电机系统 ==========
+// 右电机实例
+// 使用 TIM15_CH2 (PB15/jga_right_speed) 作为PWM输出
+// GPIO: PB13(正转), PB11(反转)
+jgamotor::Jga25370 motor_right(&htim15, TIM_CHANNEL_2,
+                                jga_right_forward_GPIO_Port, jga_right_forward_Pin,
+                                jga_right_backward_GPIO_Port, jga_right_backward_Pin);
+
+// 右编码器实例
+// 使用 TIM3 作为编码器输入（4倍频模式）
+// 当前配置：PB4(A相)→TIM3_CH1, PB5(B相)→TIM3_CH2（4倍频）
+jgaencoder::Jga25370Encoder encoder_right(&htim3, 84.0f, 11, 34.0f);
+
+// ========== 共享传感器 ==========
 // 全局MPU6500实例（陀螺仪+加速度计）
 mpu6500::MPU6500 mpu;
 
-// 全局AR控制器实例
-arpid::AR ar(&motor_left, &encoder_left, &mpu);
+// ========== AR控制器 ==========
+// 左电机AR控制器实例
+arpid::AR ar_left(&motor_left, &encoder_left, &mpu);
+
+// 右电机AR控制器实例
+arpid::AR ar_right(&motor_right, &encoder_right, &mpu);
 
 // 任务栈和控制块
 // // AR控制任务栈
@@ -59,48 +79,52 @@ StaticTask_t xMpuTaskTCB;
 StackType_t uxPWMTaskStack[configMINIMAL_STACK_SIZE * 2];  // 256字节栈
 StaticTask_t xPWMTaskTCB;
 
-// // AR控制任务函数
+// AR控制任务函数（双电机）
 void arTask(void *pvPara) {
   // 初始化电机
   motor_left.init();
+  motor_right.init();
   
   // 初始化AR控制器
-  ar.init();
+  ar_left.init();
+  ar_right.init();
   
   // 等待3秒（等待陀螺仪校准完成）
   vTaskDelay(pdMS_TO_TICKS(3000));
   
   // 自动启动AR控制
-  ar.enable();
-  ar.setTargetVelocity(0.0f);  // 原地平衡
+  ar_left.enable();
+  ar_right.enable();
+  ar_left.setTargetVelocity(0.0f);   // 左电机原地平衡
+  ar_right.setTargetVelocity(0.0f);  // 右电机原地平衡
   
   // 控制周期
   const uint32_t UPDATE_PERIOD_MS = 5;  // 5ms = 200Hz
   const float dt = UPDATE_PERIOD_MS / 1000.0f;
   
   while (true) {
-    // AR控制更新
-    ar.update(dt);
+    // AR控制更新（双电机）
+    ar_left.update(dt);
+    ar_right.update(dt);
     
     // 延时
     vTaskDelay(pdMS_TO_TICKS(UPDATE_PERIOD_MS));
   }
 }
 
-// 编码器读取任务函数
+// 编码器读取任务函数（双编码器）
 void encoderTask(void *pvPara) {
-  // 启动COMP2（方案B需要启动比较器）
-  HAL_COMP_Start(&hcomp2);
-  
   // 初始化编码器
   encoder_left.init();
+  encoder_right.init();
   
   // 更新周期（毫秒）
   const uint32_t UPDATE_PERIOD_MS = 20;  // 20ms = 50Hz
   
   while (true) {
-    // 更新编码器数据
+    // 更新编码器数据（双电机）
     encoder_left.update(UPDATE_PERIOD_MS);
+    encoder_right.update(UPDATE_PERIOD_MS);
     
     // 延时
     vTaskDelay(pdMS_TO_TICKS(UPDATE_PERIOD_MS));

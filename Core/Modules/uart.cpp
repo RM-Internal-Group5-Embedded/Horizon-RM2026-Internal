@@ -44,7 +44,7 @@ namespace uartdriver
     {
         uart_heartbeat_.last_receive_tick = xTaskGetTickCount();
         uart_heartbeat_.is_triggered = 0;
-        HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);  // 使用已定义的LED
+        // HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);  // 使用已定义的LED
     }
 
     void Uart::checkHeartbeat() //检测心跳，（这个需要被扔到loop里反复检测）
@@ -107,7 +107,7 @@ namespace uartdriver
         received_value_.fail_act = 0;
         received_value_.footer = 0;
 
-        HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);  // 使用已定义的LED
+        // HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);  // 使用已定义的LED
     }
 
     void Uart::resetDma() //重置DMA

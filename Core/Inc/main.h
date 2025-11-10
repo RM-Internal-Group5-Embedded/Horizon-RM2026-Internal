@@ -57,16 +57,16 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define BTN_0_Pin GPIO_PIN_13
-#define BTN_0_GPIO_Port GPIOC
-#define BTN_1_Pin GPIO_PIN_14
+#define sensor_1_Pin GPIO_PIN_13
+#define sensor_1_GPIO_Port GPIOC
+#define sensor_2_Pin GPIO_PIN_14
+#define sensor_2_GPIO_Port GPIOC
+#define BTN_1_Pin GPIO_PIN_15
 #define BTN_1_GPIO_Port GPIOC
-#define jga_left_forward_Pin GPIO_PIN_1
-#define jga_left_forward_GPIO_Port GPIOA
-#define jga_left_backward_Pin GPIO_PIN_2
-#define jga_left_backward_GPIO_Port GPIOA
-#define jga_encoder_B_Pin GPIO_PIN_3
-#define jga_encoder_B_GPIO_Port GPIOA
+#define jc24b_pd_Pin GPIO_PIN_0
+#define jc24b_pd_GPIO_Port GPIOA
+#define jc24b_set_Pin GPIO_PIN_1
+#define jc24b_set_GPIO_Port GPIOA
 #define MPU6500_CS_Pin GPIO_PIN_4
 #define MPU6500_CS_GPIO_Port GPIOA
 #define MPU6500_SCLK_Pin GPIO_PIN_5
@@ -75,30 +75,32 @@ void Error_Handler(void);
 #define MPU6500_MISO_GPIO_Port GPIOA
 #define MPU6500_MOSI_Pin GPIO_PIN_7
 #define MPU6500_MOSI_GPIO_Port GPIOA
-#define LED1_Pin GPIO_PIN_12
-#define LED1_GPIO_Port GPIOB
-#define LED2_Pin GPIO_PIN_13
-#define LED2_GPIO_Port GPIOB
-#define jpa_left_speed_Pin GPIO_PIN_14
-#define jpa_left_speed_GPIO_Port GPIOB
-#define jga_encoder_A_Pin GPIO_PIN_6
-#define jga_encoder_A_GPIO_Port GPIOC
-#define SEG_DP_Pin GPIO_PIN_15
-#define SEG_DP_GPIO_Port GPIOA
-#define SEG_F_Pin GPIO_PIN_11
-#define SEG_F_GPIO_Port GPIOC
-#define SEG_E_Pin GPIO_PIN_3
-#define SEG_E_GPIO_Port GPIOB
-#define SEG_D_Pin GPIO_PIN_4
-#define SEG_D_GPIO_Port GPIOB
-#define SEG_C_Pin GPIO_PIN_5
-#define SEG_C_GPIO_Port GPIOB
-#define SEG_B_Pin GPIO_PIN_6
-#define SEG_B_GPIO_Port GPIOB
-#define SEG_A_Pin GPIO_PIN_7
-#define SEG_A_GPIO_Port GPIOB
-#define LED0_Pin GPIO_PIN_9
-#define LED0_GPIO_Port GPIOB
+#define jga_left_backward_Pin GPIO_PIN_10
+#define jga_left_backward_GPIO_Port GPIOB
+#define jga_right_backward_Pin GPIO_PIN_11
+#define jga_right_backward_GPIO_Port GPIOB
+#define jga_left_forward_Pin GPIO_PIN_12
+#define jga_left_forward_GPIO_Port GPIOB
+#define jga_right_forward_Pin GPIO_PIN_13
+#define jga_right_forward_GPIO_Port GPIOB
+#define jga_left_speed_Pin GPIO_PIN_14
+#define jga_left_speed_GPIO_Port GPIOB
+#define jga_right_speed_Pin GPIO_PIN_15
+#define jga_right_speed_GPIO_Port GPIOB
+#define jga_left_encoder_A_Pin GPIO_PIN_11
+#define jga_left_encoder_A_GPIO_Port GPIOA
+#define jga_left_encoder_B_Pin GPIO_PIN_12
+#define jga_left_encoder_B_GPIO_Port GPIOA
+#define servo_0_Pin GPIO_PIN_15
+#define servo_0_GPIO_Port GPIOA
+#define servo_1_Pin GPIO_PIN_3
+#define servo_1_GPIO_Port GPIOB
+#define jga_right_encoder_A_Pin GPIO_PIN_4
+#define jga_right_encoder_A_GPIO_Port GPIOB
+#define jga_right_encoder_B_Pin GPIO_PIN_5
+#define jga_right_encoder_B_GPIO_Port GPIOB
+#define ws2812_Pin GPIO_PIN_9
+#define ws2812_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 

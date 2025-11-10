@@ -55,11 +55,8 @@
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
-extern DMA_HandleTypeDef hdma_tim1_ch1;
 extern DMA_HandleTypeDef hdma_usart3_rx;
 extern UART_HandleTypeDef huart3;
-extern TIM_HandleTypeDef htim4;
-
 /* USER CODE BEGIN EV */
 
 /* USER CODE END EV */
@@ -163,20 +160,6 @@ void DebugMon_Handler(void)
 /******************************************************************************/
 
 /**
-  * @brief This function handles DMA1 channel1 global interrupt.
-  */
-void DMA1_Channel1_IRQHandler(void)
-{
-  /* USER CODE BEGIN DMA1_Channel1_IRQn 0 */
-
-  /* USER CODE END DMA1_Channel1_IRQn 0 */
-  HAL_DMA_IRQHandler(&hdma_tim1_ch1);
-  /* USER CODE BEGIN DMA1_Channel1_IRQn 1 */
-
-  /* USER CODE END DMA1_Channel1_IRQn 1 */
-}
-
-/**
   * @brief This function handles DMA1 channel2 global interrupt.
   */
 void DMA1_Channel2_IRQHandler(void)
@@ -188,20 +171,6 @@ void DMA1_Channel2_IRQHandler(void)
   /* USER CODE BEGIN DMA1_Channel2_IRQn 1 */
 
   /* USER CODE END DMA1_Channel2_IRQn 1 */
-}
-
-/**
-  * @brief This function handles TIM4 global interrupt.
-  */
-void TIM4_IRQHandler(void)
-{
-  /* USER CODE BEGIN TIM4_IRQn 0 */
-
-  /* USER CODE END TIM4_IRQn 0 */
-  HAL_TIM_IRQHandler(&htim4);
-  /* USER CODE BEGIN TIM4_IRQn 1 */
-
-  /* USER CODE END TIM4_IRQn 1 */
 }
 
 /**

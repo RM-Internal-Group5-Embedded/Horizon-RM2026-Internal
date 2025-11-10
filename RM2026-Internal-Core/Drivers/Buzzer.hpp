@@ -1,28 +1,28 @@
-#pragma once
+// #pragma once
 
-#include "AppConfig.h"
+// #include "AppConfig.h"
 
-#if USE_BUZZER
-#include "main.h"
-namespace Buzzer
-{
+// #if USE_BUZZER
+// #include "main.h"
+// namespace Buzzer
+// {
 
-void init();
+// void init();
 
-struct Note
-{
-    float freq;
-    uint32_t onDuration;
-    uint32_t offDuration;
-    float intensity;
-};
+// struct Note
+// {
+//     float freq;
+//     uint32_t onDuration;
+//     uint32_t offDuration;
+//     float intensity;
+// };
 
-/**
- * @brief Play a note
- * @param note
- */
-void playNote(const Note &note);
+// /**
+//  * @brief Play a note
+//  * @param note
+//  */
+// void playNote(const Note &note);
 
-}  // namespace Buzzer
+// }  // namespace Buzzer
 
-#endif
+// #endif

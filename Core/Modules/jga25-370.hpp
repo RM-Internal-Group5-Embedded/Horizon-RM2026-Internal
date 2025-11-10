@@ -13,8 +13,10 @@ namespace jgamotor
     class Jga25370
     {
     public:
-        // 构造函数：传入PWM定时器和通道
-        Jga25370(TIM_HandleTypeDef* _pwm_timer, uint32_t _pwm_channel);
+        // 构造函数：传入PWM定时器、通道和GPIO引脚
+        Jga25370(TIM_HandleTypeDef* _pwm_timer, uint32_t _pwm_channel,
+                 GPIO_TypeDef* _forward_port, uint16_t _forward_pin,
+                 GPIO_TypeDef* _backward_port, uint16_t _backward_pin);
         
         // 初始化电机
         void init();
@@ -31,6 +33,10 @@ namespace jgamotor
     private:
         TIM_HandleTypeDef* pwm_timer_;
         uint32_t pwm_channel_;
+        GPIO_TypeDef* forward_port_;
+        uint16_t forward_pin_;
+        GPIO_TypeDef* backward_port_;
+        uint16_t backward_pin_;
         
         void setPwm(uint16_t _duty);  // 设置PWM占空比
     };
