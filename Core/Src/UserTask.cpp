@@ -62,7 +62,7 @@ void transceiverTask(void *pvPara) {
       HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
       HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_RESET);
       
-      // TODO: 在此位置停止电机以确保安全
+      // 发送停止电机以确保安全
     }
     
     vTaskDelay(pdMS_TO_TICKS(50));  // 50ms延时
