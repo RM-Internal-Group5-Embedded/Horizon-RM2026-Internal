@@ -273,80 +273,65 @@ DMJ4310Functions::DMJ4310Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callbac
 }
 
 void DMJ4310Functions::readMotorFeedback(uint8_t rxData[8]) {
-    // DMJ4310 MIT protocol feedback format (from manual):
-    // D[0]: MST_ID (Master ID)
-    // D[1]: ID | ERR << 4 (Motor ID[3:0] | Error[7:4])
-    // D[2]: POS[15:8] (Position high byte)
-    // D[3]: POS[7:0] (Position low byte)
-    // D[4]: VEL[11:4] (Velocity high 8 bits)
-    // D[5]: VEL[3:0] | T[11:8] (Velocity low 4 bits + Torque high 4 bits)
-    // D[6]: T[7:0] (Torque low byte)
-    // D[7]: T_MOS or T_Rotor (Temperature in °C)
-    
     uint32_t current = HAL_GetTick();
+    motor_feedback.last_update = current;
     motor_feedback.frequency = 
         1000.0f / (current - motor_feedback.last_update);
     
-    // Extract error code from D[1]
-    uint8_t rx_motor_id = rxData[1] & 0x0F;
-    uint8_t rx_error_code = (rxData[1] >> 4) & 0x0F;
+    // Extract motor ID and error code from D[0]
+    rx_motor_id = rxData[0] & 0x0F;
+    error_code = (rxData[0] >> 4) & 0x0F;
+    //8=Overvoltage, 9=Undervoltage, A=Overcurrent, 
+    //B=MOS overtemp, C=Coil overtemp, D=Comm loss, E=Overload
+
+    // Decode position (16 bits) from D[1:2]
+    int16_t current_angle = (rxData[1] << 8) | rxData[2];
+    if(!initialized){
+        initialized = true;
+        prev_angle = current_angle;
+    }
+    int16_t angle_diff = current_angle - prev_angle;
+    if (angle_diff < -16000) {
+        // Positive wrap: 8191 → 0
+        total_motor_counts += 32767 + angle_diff;
+    } else if (angle_diff > 16000) {
+        // Negative wrap: 0 → 8191  
+        total_motor_counts += angle_diff - 32767;
+    } else {
+        total_motor_counts += angle_diff;
+    }
+    prev_angle = current_angle;
+    // Store data
+    motor_feedback.angle = current_angle;
+    // Calculate top shaft angle (0-360°)
+    float total_motor_revs = (float)total_motor_counts / 65535.0f;
+    motor_feedback.top_shaft_angle = total_motor_revs*360;
+
+
     
-    // Decode position (16 bits) from D[2:3]
-    uint16_t p_int = (rxData[2] << 8) | rxData[3];
-    float position = uintToFloat(p_int, p_min, p_max, 16);
+    // Decode velocity (12 bits) from D[3:4]
+    uint16_t v_int = (rxData[3] << 4) | ((rxData[4] >> 4) & 0x0F);
     
-    // Decode velocity (12 bits) from D[4:5]
-    uint16_t v_int = (rxData[4] << 4) | ((rxData[5] >> 4) & 0x0F);
-    float velocity = uintToFloat(v_int, v_min, v_max, 12);
+    // Decode torque (12 bits) from D[4:5]
+    uint16_t t_int = ((rxData[4] & 0x0F) << 8) | rxData[5];
     
-    // Decode torque (12 bits) from D[5:6]
-    uint16_t t_int = ((rxData[5] & 0x0F) << 8) | rxData[6];
-    float torque = uintToFloat(t_int, t_min, t_max, 12);
+    // Convert to float using configured ranges
+    //float position = uintToFloat(p_int, p_min, p_max, 16);  // radians
+    float velocity = uintToFloat(v_int, v_min, v_max, 12);  // rad/s
+    float torque = uintToFloat(t_int, t_min, t_max, 12);    // Nm
     
-    // Temperature from D[7]
-    uint8_t temperature = rxData[7];
     
-    // Convert to motor_feedback structure
-    // Position in radians -> convert to encoder counts (0-8191 range)
-    motor_feedback.angle = (int16_t)((position / (2.0f * 3.14159f)) * 8191.0f);
+    //s_dmj_temp_rotor = rxData[7];    // Rotor temperature
     
     // Velocity in rad/s -> RPM
     motor_feedback.rpm = (int16_t)(velocity * 9.5493f); // rad/s to RPM
     motor_feedback.bottom_rpm = motor_feedback.rpm;
     
-    // Torque in Nm -> store as mNm (millinewton-meters)
+    // Torque in Nm -> store as mNm (millinewton-meters) for precision
     motor_feedback.current = (int16_t)(torque * 1000.0f);
     
-    // Temperature in °C
-    motor_feedback.temperature = temperature;
-    motor_feedback.last_update = current;
-    
-    // Track position changes for absolute position tracking
-    int16_t angle_diff = motor_feedback.angle - prev_angle;
-    if (angle_diff < -4000) {
-        // Wrapped forward
-        total_motor_counts += 8191 + angle_diff;
-    } else if (angle_diff > 4000) {
-        // Wrapped backward
-        total_motor_counts += angle_diff - 8191;
-    } else {
-        // Normal increment
-        total_motor_counts += angle_diff;
-    }
-    prev_angle = motor_feedback.angle;
-    
-    // Calculate top shaft angle (0-360° or -180 to 180°)
-    float total_revs = (float)total_motor_counts / 8191.0f;
-    motor_feedback.top_shaft_angle = fmodf(total_revs * 360.0f, 360.0f);
-    if (motor_feedback.top_shaft_angle > 180.0f) {
-        motor_feedback.top_shaft_angle -= 360.0f;
-    }
-    
-    // Store error code for debugging
-    // Error codes: 8=Overvoltage, 9=Undervoltage, A=Overcurrent, 
-    //              B=MOS overtemp, C=Coil overtemp, D=Comm loss, E=Overload
-    this->error_code = rx_error_code;
-    (void)rx_motor_id;   // Should match our motor_id
+    // Temperature in °C (use MOS temp as primary, rotor as secondary)
+    motor_feedback.temperature = rxData[6];  // MOS temperature
 }
 
 const char* DMJ4310Functions::getErrorString() const {
@@ -363,16 +348,19 @@ const char* DMJ4310Functions::getErrorString() const {
     }
 }
 
-void DMJ4310Functions::sendCurrent(int16_t current) {
-    // Simple current control using MIT protocol
-    // Convert current to torque (assuming simple linear relationship)
-    // For now, use torque feedforward with position/velocity = 0
-    float torque = (float)current / 1000.0f; // Convert mA to estimated Nm
-    sendMITCommand(0.0f, 0.0f, 0.0f, 0.0f, torque);
-}
 
 void DMJ4310Functions::sendMITCommand(float p_des, float v_des, float kp, float kd, float t_ff) {
-    // MIT protocol encoding
+    // MIT protocol encoding for DMJ4310
+    // CORRECT Control Frame format:
+    // D[0] = p_des [15:8]
+    // D[1] = p_des [7:0]
+    // D[2] = v_des [11:4]
+    // D[3] = v_des[3:0] | Kp[11:8]
+    // D[4] = Kp [7:0]
+    // D[5] = Kd [11:4]
+    // D[6] = Kd[3:0] | t_ff[11:8]
+    // D[7] = t_ff[7:0]
+    
     // Convert floats to scaled integers
     uint16_t p_int = floatToUint(p_des, p_min, p_max, 16);
     uint16_t v_int = floatToUint(v_des, v_min, v_max, 12);
@@ -380,16 +368,16 @@ void DMJ4310Functions::sendMITCommand(float p_des, float v_des, float kp, float 
     uint16_t kd_int = floatToUint(kd, 0.0f, 5.0f, 12);
     uint16_t t_int = floatToUint(t_ff, t_min, t_max, 12);
     
-    // Pack into 8 bytes
+    // Pack into 8 bytes according to MIT protocol
     memset(data, 0, 8);
-    data[0] = (p_int >> 8) & 0xFF;                    // p_des[15:8]
-    data[1] = p_int & 0xFF;                           // p_des[7:0]
-    data[2] = (v_int >> 4) & 0xFF;                    // v_des[11:4]
+    data[0] = (p_int >> 8) & 0xFF;                              // p_des[15:8]
+    data[1] = p_int & 0xFF;                                     // p_des[7:0]
+    data[2] = (v_int >> 4) & 0xFF;                              // v_des[11:4]
     data[3] = ((v_int & 0x0F) << 4) | ((kp_int >> 8) & 0x0F);  // v_des[3:0] | Kp[11:8]
-    data[4] = kp_int & 0xFF;                          // Kp[7:0]
-    data[5] = (kd_int >> 4) & 0xFF;                   // Kd[11:4]
+    data[4] = kp_int & 0xFF;                                    // Kp[7:0]
+    data[5] = (kd_int >> 4) & 0xFF;                             // Kd[11:4]
     data[6] = ((kd_int & 0x0F) << 4) | ((t_int >> 8) & 0x0F);  // Kd[3:0] | t_ff[11:8]
-    data[7] = t_int & 0xFF;                           // t_ff[7:0]
+    data[7] = t_int & 0xFF;                                     // t_ff[7:0]
     
     Modules::DJIMotors::send(&txHeader, data);
 }
@@ -397,8 +385,21 @@ void DMJ4310Functions::sendMITCommand(float p_des, float v_des, float kp, float 
 void DMJ4310Functions::enableMotor() {
     // MIT Cheetah protocol: Enable motor command
     // Send: 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFC
+    
+    // Debug: Track enable attempts
+    static volatile uint32_t s_enable_count = 0;
+    static volatile uint8_t s_enable_data[8] = {0};
+    static volatile uint16_t s_enable_can_id = 0;
+    
+    s_enable_count++;
+    s_enable_can_id = txHeader.Identifier;
+    
     memset(data, 0xFF, 8);
     data[7] = 0xFC;
+    
+    // Store for debugging
+    for (int i = 0; i < 8; i++) s_enable_data[i] = data[i];
+    
     Modules::DJIMotors::send(&txHeader, data);
     // Note: No delay - motor will respond when ready
 }
@@ -409,18 +410,6 @@ void DMJ4310Functions::disableMotor() {
     memset(data, 0xFF, 8);
     data[7] = 0xFD;
     Modules::DJIMotors::send(&txHeader, data);
-}
-
-void DMJ4310Functions::zeroPosition() {
-    // MIT Cheetah protocol: Zero position command
-    // Send: 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFE
-    memset(data, 0xFF, 8);
-    data[7] = 0xFE;
-    Modules::DJIMotors::send(&txHeader, data);
-    
-    // Reset internal position tracking
-    prev_angle = 0;
-    total_motor_counts = 0;
 }
 
 void DMJ4310Functions::enableMotorBroadcast() {
@@ -496,6 +485,7 @@ void GM6020Functions::readMotorFeedback(uint8_t rxData[8]) {
         initialized = true;
         prev_angle = current_angle;
     }
+    
     int16_t angle_diff = current_angle - prev_angle;
     if (angle_diff < -4000) {
         // Positive wrap: 8191 → 0

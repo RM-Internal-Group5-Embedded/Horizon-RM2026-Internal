@@ -92,7 +92,6 @@ int main(void)
   MX_GPIO_Init();
   MX_DMA_Init();
   MX_TIM1_Init();
-  MX_TIM2_Init();
   MX_FDCAN1_Init();
   MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */

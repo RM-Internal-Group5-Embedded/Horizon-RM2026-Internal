@@ -61,8 +61,6 @@ void Error_Handler(void);
 #define BTN_0_GPIO_Port GPIOC
 #define BTN_1_Pin GPIO_PIN_14
 #define BTN_1_GPIO_Port GPIOC
-#define BUZZER_Pin GPIO_PIN_0
-#define BUZZER_GPIO_Port GPIOA
 #define LED1_Pin GPIO_PIN_12
 #define LED1_GPIO_Port GPIOB
 #define LED2_Pin GPIO_PIN_13
@@ -79,12 +77,6 @@ void Error_Handler(void);
 #define SEG_E_GPIO_Port GPIOB
 #define SEG_D_Pin GPIO_PIN_4
 #define SEG_D_GPIO_Port GPIOB
-#define SEG_C_Pin GPIO_PIN_5
-#define SEG_C_GPIO_Port GPIOB
-#define SEG_B_Pin GPIO_PIN_6
-#define SEG_B_GPIO_Port GPIOB
-#define SEG_A_Pin GPIO_PIN_7
-#define SEG_A_GPIO_Port GPIOB
 #define LED0_Pin GPIO_PIN_9
 #define LED0_GPIO_Port GPIOB
 

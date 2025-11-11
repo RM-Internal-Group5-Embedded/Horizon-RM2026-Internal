@@ -100,25 +100,28 @@ class JGA25370Functions : public MotorFunctions {
 class DMJ4310Functions : public MotorFunctions {
 private:
     // MIT protocol parameter ranges (can be configured via debug assistant)
-    float p_min = -12.5f;   // Default position range
-    float p_max = 12.5f;
-    float v_min = -45.0f;   // Default velocity range (rad/s)
-    float v_max = 45.0f;
-    float t_min = -18.0f;   // Default torque range (Nm)
-    float t_max = 18.0f;
+    // 1:1 ratio - motor position = output position
+    float p_min = -12.5f;   // Position min (radians)
+    float p_max = 12.5f;    // Position max (radians)
+    float v_min = -45.0f;   // Velocity min (rad/s)
+    float v_max = 45.0f;    // Velocity max (rad/s)
+    float t_min = -18.0f;   // Torque min (Nm)
+    float t_max = 18.0f;    // Torque max (Nm)
     
 public:
+    bool initialized = false;
+    
+    // DMJ4310 has 1:1 gear reduction (direct drive)
+    static constexpr float REDUCTION_RATIO = 1.0f;
     // Error code from feedback (0=no error, 8-E=various errors)
     uint8_t error_code = 0;
+    uint8_t rx_motor_id = 0;
     
     DMJ4310Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callback, 
                             pFDCAN_ErrorStatusCallbackTypeDef errorCallback,
                             uint16_t filterID2, uint16_t filterID1); 
 
     void readMotorFeedback(uint8_t rxData[8]) override;
-    
-    // DMJ4310 uses MIT control protocol
-    void sendCurrent(int16_t current) override;
     
     // MIT protocol: send position, velocity, Kp, Kd, and torque feedforward
     void sendMITCommand(float p_des, float v_des, float kp, float kd, float t_ff);
@@ -127,14 +130,20 @@ public:
     void enableMotor();
     void disableMotor();
     
-    // Zero the motor position (set current position as zero)
-    void zeroPosition();
-    
     // Try enabling with different motor IDs (broadcast-like behavior)
     void enableMotorBroadcast();
     
     // Set parameter ranges (must match motor configuration)
     void setRanges(float p_min, float p_max, float v_min, float v_max, float t_min, float t_max);
+    
+    // Get output shaft position (1:1 direct drive)
+    float getOutputPosition() const { return motor_feedback.top_shaft_angle; }
+    
+    // Get output shaft velocity (1:1 direct drive)
+    float getOutputVelocity() const { return motor_feedback.rpm / 9.5493f; }  // Convert RPM to rad/s
+    
+    // Get output shaft torque (1:1 direct drive)
+    float getOutputTorque() const { return motor_feedback.current / 1000.0f; }  // Convert mNm to Nm
     
     // Check for errors (returns true if error exists)
     bool hasError() const { return error_code != 0; }

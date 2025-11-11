@@ -102,6 +102,10 @@ public:
 
     // Send combined motor currents to all 4 motors
     void sendMotorCurrents(int16_t curr_lf, int16_t curr_rf, int16_t curr_lb, int16_t curr_rb);
+    
+    // Helper functions for input processing (modify values by reference)
+    static void applyDeadband(float& value, float deadband);
+    static void applyCurveHalfQuad(float& value);
 };
 
 // Separate control system for claw motors

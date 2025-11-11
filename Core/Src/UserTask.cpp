@@ -15,6 +15,7 @@
 #include "uart.hpp"  // 包含您的UART驱动头文件
 #include "EROperatingSystem.hpp"
 #include "MotorFunctions.hpp"
+#include "ws2812.hpp"
 
 extern "C" {
 #include "fdcan.h"
@@ -106,20 +107,10 @@ extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxF
         if (s_m3508_claw_p) s_m3508_claw_p->readMotorFeedback(rxData);
         break;
       
-      // DMJ4310 feedback on Master ID (default 0)
-      case 0x000:  // Master ID = 0 (FACTORY DEFAULT)
-      case 0x001:  // Master ID = 1
-      case 0x002:  // Master ID = 2
-      case 0x003:  // Master ID = 3
-      case 0x004:  // Master ID = 4
-      case 0x005:  // Master ID = 5
-      case 0x006:  // Master ID = 6
-      case 0x007:  // Master ID = 7
-        if (dmj4310_motor_p) {
-          dmj4310_motor_p->readMotorFeedback(rxData);
-        }
+      // DMJ4310 feedback on Master ID 768 (0x300)
+      case 0x300:  // Master ID = 768 (configured in motor)
+        if (dmj4310_motor_p) dmj4310_motor_p->readMotorFeedback(rxData);
         break;
-      
       // GM6020 feedback IDs: 0x205-0x20B for motor IDs 1-7
       
       case 0x20B:  // GM6020 motor ID 7 (small claw)
@@ -135,8 +126,36 @@ extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxF
   }
 }
 
+// CAN error tracking
+static volatile uint32_t s_can_error_count = 0;
+static volatile uint32_t s_can_last_error = 0;
+static volatile uint32_t s_can_bus_off_count = 0;
+
 extern "C" void FDCAN1_ErrorStatusCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t ErrorStatusITs) {
-  (void)hfdcan; (void)ErrorStatusITs;
+  s_can_error_count++;
+  s_can_last_error = ErrorStatusITs;
+  
+  // Check for bus-off condition (critical error)
+  if (ErrorStatusITs & FDCAN_FLAG_BUS_OFF) {
+    s_can_bus_off_count++;
+    
+    // Attempt automatic recovery from bus-off
+    if (HAL_FDCAN_Stop(hfdcan) == HAL_OK) {
+      // Wait a bit before restarting
+      HAL_Delay(10);
+      HAL_FDCAN_Start(hfdcan);
+    }
+  }
+  
+  // Check for error warning (accumulating errors)
+  if (ErrorStatusITs & FDCAN_FLAG_ERROR_WARNING) {
+    // High error rate detected - could log or reduce CAN traffic
+  }
+  
+  // Check for error passive (serious error accumulation)
+  if (ErrorStatusITs & FDCAN_FLAG_ERROR_PASSIVE) {
+    // Very high error rate - may need to reset system
+  }
 }
 
 ERStatusControl *er_status_control_p = nullptr;
@@ -169,11 +188,33 @@ void updateERTask(void *pvPara) {
       HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
     }
 
-    // Update wheel state and motors (chassis only)
-    er_status_control_p->switchState(g_uart.getReceivedValue());
-    er_status_control_p->update(g_uart.getReceivedValue());
+    // Check for motor timeouts (no feedback for >100ms = disconnected)
+    uint32_t current_time = HAL_GetTick();
+    bool motor_timeout = false;
     
-    vTaskDelay(pdMS_TO_TICKS(10)); // 100 Hz loop
+    if (motor_l_f_p && (current_time - motor_l_f_p->motor_feedback.last_update > 100)) {
+      motor_timeout = true;
+    }
+    if (motor_r_f_p && (current_time - motor_r_f_p->motor_feedback.last_update > 100)) {
+      motor_timeout = true;
+    }
+    if (motor_l_b_p && (current_time - motor_l_b_p->motor_feedback.last_update > 100)) {
+      motor_timeout = true;
+    }
+    if (motor_r_b_p && (current_time - motor_r_b_p->motor_feedback.last_update > 100)) {
+      motor_timeout = true;
+    }
+    
+    // If any motor timed out, send zero commands for safety
+    if (motor_timeout) {
+      er_status_control_p->sendMotorCurrents(0, 0, 0, 0);
+    } else {
+      // Normal operation: Update wheel state and motors
+      er_status_control_p->switchState(g_uart.getReceivedValue());
+      er_status_control_p->update(g_uart.getReceivedValue());
+    }
+    
+    vTaskDelay(pdMS_TO_TICKS(5)); 
   }
 }
 
@@ -182,11 +223,11 @@ void updateClawTask(void *pvPara) {
   
   // Initialize claw motors once after scheduler starts
   static bool motors_initialized = false;
+  
   if (!motors_initialized) {
-    // Enable DMJ4310 motors
-    dmj4310_motor_p->enableMotorBroadcast();
+    vTaskDelay(pdMS_TO_TICKS(200)); // Wait for CAN to stabilize
     
-    
+    dmj4310_motor_p->enableMotor();
     // Send initial zero commands to GM6020 and M3508 claw motors
     gm6020_motor_p->sendCurrent(0);
     s_m3508_claw_p->sendCurrent(0);
@@ -195,11 +236,30 @@ void updateClawTask(void *pvPara) {
   }
   
   while (true) {
-    // Update claw state and motors based on UART commands
-    er_claw_control_p->switchState(g_uart.getReceivedValue());
-    er_claw_control_p->update();
+    uint32_t current_time = HAL_GetTick();
     
-    vTaskDelay(pdMS_TO_TICKS(8)); // 50 Hz loop (slower to reduce CAN traffic)
+    // Check for claw motor timeouts (no feedback for >100ms = disconnected)
+    bool claw_timeout = false;
+    if (gm6020_motor_p && (current_time - gm6020_motor_p->motor_feedback.last_update > 100)) 
+      claw_timeout = true;
+    
+    if (s_m3508_claw_p && (current_time - s_m3508_claw_p->motor_feedback.last_update > 100)) 
+      claw_timeout = true;
+    
+    if (dmj4310_motor_p && (current_time - dmj4310_motor_p->motor_feedback.last_update > 100)) 
+      claw_timeout = true;
+    // If any claw motor timed out, send zero commands for safety
+    if (claw_timeout) {
+      if (gm6020_motor_p) gm6020_motor_p->sendCurrent(0);
+      if (s_m3508_claw_p) s_m3508_claw_p->sendCurrent(0);
+      // DMJ4310 already gets zero command above
+    } else {
+      // Normal operation: Update claw state and motors
+      er_claw_control_p->switchState(g_uart.getReceivedValue());
+      er_claw_control_p->update();
+    }
+    
+    vTaskDelay(pdMS_TO_TICKS(10));  // 100Hz for smooth DMJ4310 feedback
   }
 }
 
@@ -208,6 +268,12 @@ void updateClawTask(void *pvPara) {
  * @todo  Add your own task in this file
  */
 void startUserTasks() {
+  // Initialize WS2812 LED strip (visual indicator that system started)
+  WS2812::init(8);  // Initialize with 8 LEDs
+  WS2812::blink(0, 0, 255, 0);    // LED 0: Green (system started)
+  WS2812::blink(1, 0, 0, 255);    // LED 1: Blue (ready)
+  WS2812::blink(2, 255, 0, 0);    // LED 2: Red (standby)
+  
   // Initialize four M3508 motors with static storage and assign global pointers
   static M3508Functions s_motor_l_f(1, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x201, 0x204); 
   static M3508Functions s_motor_r_f(2, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x201, 0x204); 
@@ -220,7 +286,8 @@ void startUserTasks() {
   motor_r_b_p = &s_motor_r_b;
 
   // Initialize claw motors
-  static DMJ4310Functions s_dmj4310_base(5, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x205, 0x20B);
+  // DMJ4310: CAN ID = 1, Master ID = 768 (0x300), MIT mode
+  static DMJ4310Functions s_dmj4310_base(1, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x205, 0x20B);
   static GM6020Functions  s_gm6020_small(7, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x205, 0x20B);
   static M3508Functions   s_m3508_claw  (5, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x205, 0x20B);
   

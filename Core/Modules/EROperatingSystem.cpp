@@ -74,26 +74,25 @@ void ERStatusControl::traversal( uint16_t joystick_r_x, uint16_t joystick_r_y,
                 uint16_t joystick_l_x, uint16_t rpm_magnitude, 
                 uint16_t angle_magnitude) {
     
-    auto apply_deadband = [](float v, float db) -> float {
-        return (fabsf(v) < db) ? 0.0f : v;
-    };
-    auto curve_half_quad = [](float v) -> float {
-        float sign = v >= 0.0f ? 1.0f : -1.0f;
-        float a = fabsf(v);
-        // curvature: 0.5 * x^2 in [0, 0.5], preserve sign
-        return sign * (0.5f * a * a);
-    };
-
+    // Convert joystick values to normalized [-1, 1] range
     float rx = (static_cast<float>(joystick_r_x) - CENTER) / SBUS_SPAN;
     float ry = (static_cast<float>(joystick_r_y) - CENTER) / SBUS_SPAN;
     float lx = (static_cast<float>(joystick_l_x) - CENTER) / SBUS_SPAN;
 
-    // Non-linear mapping for RPM axes (rx, ry): 0.5*x^2 curvature
-    rx = curve_half_quad(apply_deadband(rx, 0.03f)) * static_cast<float>(rpm_magnitude);
-    ry = curve_half_quad(apply_deadband(ry, 0.03f)) * static_cast<float>(rpm_magnitude);
-    // Keep rotation linear
-    lx = apply_deadband(lx, 0.03f) * static_cast<float>(angle_magnitude) ;
-    //* (lengthX + lengthY);
+    // Apply deadband to filter out small inputs
+    applyDeadband(rx, 0.03f);
+    applyDeadband(ry, 0.03f);
+    applyDeadband(lx, 0.03f);
+    
+    // Apply non-linear curve to RPM axes for smoother control at low speeds
+    applyCurveHalfQuad(rx);
+    applyCurveHalfQuad(ry);
+    // Keep rotation linear (no curve on lx)
+    
+    // Scale by magnitude
+    rx = rx * static_cast<float>(rpm_magnitude);
+    ry = ry * static_cast<float>(rpm_magnitude);
+    lx = lx * static_cast<float>(angle_magnitude);
 
     // Mecanum mix
     front_left_rpm  = static_cast<int16_t>(ry + rx + lx);
@@ -148,6 +147,21 @@ void ERStatusControl::update(const uartdriver::ReceivedValue& received_data) {
     }
 }
 
+// Helper function: Apply deadband to a value (modifies by reference)
+void ERStatusControl::applyDeadband(float& value, float deadband) {
+    if (fabsf(value) < deadband) {
+        value = 0.0f;
+    }
+}
+
+// Helper function: Apply half-quadratic curve to a value (modifies by reference)
+void ERStatusControl::applyCurveHalfQuad(float& value) {
+    float sign = value >= 0.0f ? 1.0f : -1.0f;
+    float a = fabsf(value);
+    // curvature: 0.5 * x^2, preserve sign
+    value = sign * (0.5f * a * a);
+}
+
 void ERStatusControl::sendMotorCurrents(int16_t curr_lf, int16_t curr_rf, int16_t curr_lb, int16_t curr_rb) {
     extern FDCAN_HandleTypeDef hfdcan1;
     uint8_t data[8];
@@ -189,7 +203,7 @@ void ERStatusControl::sendMotorCurrents(int16_t curr_lf, int16_t curr_rf, int16_
     // Check if TX FIFO has space before sending
     uint32_t freeFifoLevel = HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan1);
     if (freeFifoLevel > 0) {
-        HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &motor_tx_header, data);
+    HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &motor_tx_header, data);
     }
 }
 
@@ -265,7 +279,8 @@ ERClawControl::ERClawControl(DMJ4310Functions& base_motor, GM6020Functions& smal
 void ERClawControl::idleMode() {
     // Stop all claw motors
     if (claw_motors.base_claw) {
-        claw_motors.base_claw->sendCurrent(0);
+        // For DMJ4310, send zero torque MIT command (no position hold)
+        claw_motors.base_claw->sendMITCommand(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
     }
     // Send zero to both GM6020 and M3508 claw motors
     sendClawCurrents(0, 0);
@@ -293,9 +308,16 @@ void ERClawControl::claspMode() {
     static volatile int16_t s_gm6020_rpm = 0;
     static volatile int16_t s_gm6020_output = 0;
     
-    // DMJ4310 base claw control
+    // DMJ4310 base claw control - CLASP MODE: go to 720° (top shaft angle)
+    // 1:1 ratio - 720° = 4π radians ≈ 12.566 radians
     if (claw_motors.base_claw) {
-        //claw_motors.base_claw->sendMITCommand(1.0f, 0.0f, 50.0f, 2.0f, 0.0f);
+        // 720° = 4π radians (within ±12.5 rad range)
+        float motor_position = 4.0f * 3.14159265f;  // ~12.566 radians = 720°
+        // MIT command: position=12.566 rad, velocity=0, kp=50, kd=2, torque=0
+        claw_motors.base_claw->sendMITCommand(motor_position, 0.1f, 
+                                claw_motors.base_claw->RPM_KP, 
+                                claw_motors.base_claw->RPM_KD, 
+                                claw_motors.base_claw->RPM_KI);
     }
     
     if (claw_motors.small_claw) {
@@ -329,9 +351,15 @@ void ERClawControl::releaseMode() {
     if (dt <= 0 || dt > 0.1f) dt = 0.01f;
     last_time = current_time;
     
-    // DMJ4310 base claw control
+    // DMJ4310 base claw control - RELEASE MODE: go to 0° (top shaft angle)
     if (claw_motors.base_claw) {
-        //claw_motors.base_claw->sendMITCommand(-1.0f, 0.0f, 50.0f, 2.0f, 0.0f);
+        // 0° top shaft = 0° motor = 0 radians
+        float motor_position = 0.0f;  // Return to zero
+        // MIT command: position=12.566 rad, velocity=0, kp=50, kd=2, torque=0
+        claw_motors.base_claw->sendMITCommand(motor_position, 0.1f, 
+                                claw_motors.base_claw->RPM_KP, 
+                                claw_motors.base_claw->RPM_KD, 
+                                claw_motors.base_claw->RPM_KI);
     }
     
     // Calculate PID for both claw motors

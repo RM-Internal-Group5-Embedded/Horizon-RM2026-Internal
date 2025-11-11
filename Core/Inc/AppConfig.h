@@ -13,7 +13,7 @@
 #pragma once
 
 
-#define USE_BUZZER 1
+#define USE_BUZZER 0
     #if USE_BUZZER
         #ifndef BUZZER_TIM_CLOCK
         #define BUZZER_TIM_CLOCK 170000000
