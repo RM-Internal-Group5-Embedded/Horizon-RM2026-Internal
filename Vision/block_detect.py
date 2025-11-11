@@ -4,6 +4,8 @@ import os
 import json
 import cv2  
 import numpy as np
+import time
+from JC42BSending import JC24BTransceiver
 
 CONFIG_DIR = os.path.join(os.path.dirname(__file__), 'config')
 REGIONS_PATH = os.path.join(CONFIG_DIR, 'regions_view.json')
@@ -46,7 +48,7 @@ def detect_blocks(frame):#只用detect矩形边框 等下看在框定的区域�
             continue
 
         #在图像坐标系中，向下是 +y
-        detections.append({'block':(x,y,x+w,y+h),'centre':((x+w)/2,(y+h)/2)})
+        detections.append({'block':(x,y,x+w,y+h),'centre':(x+w/2.0,y+h/2.0)})
 
     return binary,detections
 
@@ -59,6 +61,10 @@ def draw_regions(img,regions):
             #绘制字符串 画布，字符串，坐标，字体序号，缩放系数，颜色，粗细，线条类型(以下实线)
             cv2.putText(img,text, tuple(poly[0]), cv2.FONT_HERSHEY_SIMPLEX,0.7,(0,255,0),2,1)
 
+def regions_to_positions(index):
+    positions=[0,0,0,0]
+    positions[index]=1
+    return positions
 
 def main():
     regions=load_regions()
@@ -71,6 +77,11 @@ def main():
     else:
         print("USB相机连接失败")
         return 
+    
+    # 创建 JC24BTransceiver 并尝试连接
+    transceiver=JC24BTransceiver(port='COM8')#哪个串口要检测一下
+    transceiver.connect()
+
 
     prev_inside = [False]*len(regions)  #记录上一帧每个区域是否有block
 
@@ -109,6 +120,19 @@ def main():
             
             if not was_inside and is_inside:
                 print("Block 到达第", i+1 ,"个区域") #无线传输
+                positions=regions_to_positions(i)
+                if transceiver.connect():
+                    try:
+                        ok=transceiver.build_position_packet(positions)
+                        if not ok:
+                            print("发送失败，尝试重连串口...")
+                            # 尝试重连一次
+                            if transceiver.connect():
+                                time.sleep(0.05)
+                                transceiver.send_positions(positions)
+                    except Exception as e:
+                        
+
 
         #更新
         prev_inside = now_inside.copy()
