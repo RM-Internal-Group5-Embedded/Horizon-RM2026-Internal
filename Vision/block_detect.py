@@ -1,5 +1,5 @@
 #主运行
-#检测block是否进入预先标注的4个区域
+#检测block是否进入预先标注的4个区域，并把进入事件通过 JC24B 发送出去
 import os
 import json
 import cv2  
@@ -121,19 +121,24 @@ def main():
             if not was_inside and is_inside:
                 print("Block 到达第", i+1 ,"个区域") #无线传输
                 positions=regions_to_positions(i)
+                ok = False
                 if transceiver.connect():
-                    try:
-                        ok=transceiver.build_position_packet(positions)
-                        if not ok:
-                            print("发送失败，尝试重连串口...")
-                            # 尝试重连一次
-                            if transceiver.connect():
-                                time.sleep(0.05)
-                                transceiver.send_positions(positions)
-                    except Exception as e:
-                        
-
-
+                    ok=transceiver.send_positions(positions)
+                    if ok:
+                        print("发送成功: ", positions)
+                if not ok:
+                    print("首次发送失败，尝试重连并重发...")
+                    # 尝试重连一次
+                    if transceiver.connect():
+                        time.sleep(0.05)
+                        ok2=transceiver.send_positions(positions)
+                        if ok2:
+                            print("重连后发送成功")
+                        else:
+                            print("重连后仍然发送失败（请检查串口或接收端）")
+                    else:
+                        print("重连失败（请检查串口设备或端口）")
+      
         #更新
         prev_inside = now_inside.copy()
         
@@ -147,7 +152,8 @@ def main():
 
     capture.release()
     cv2.destroyAllWindows()
-
+    transceiver.disconnect()
+    print("程序退出，串口已关闭")
 
 if __name__=='__main__':
     main()
