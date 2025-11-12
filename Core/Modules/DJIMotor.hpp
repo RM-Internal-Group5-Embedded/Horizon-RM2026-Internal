@@ -13,24 +13,21 @@
 namespace Modules {
 namespace DJIMotors {
 
+// Clean motor feedback structure - essential feedback data only
 struct MotorFeedback {
-    int16_t angle = 0;
-    int16_t last_angle = 0; 
-          
-    int16_t rpm = 0; 
-    int16_t bottom_rpm = 0;         
-    int16_t current = 0;      
-    int16_t temperature = 0;  
-    uint32_t last_update = 0; 
-
-    int16_t target_rpm = 0;
-    float target_angle = 0;
-    int16_t output_current = 0;
-
-    float top_shaft_angle = 0;   // 0-360 degrees
-    uint16_t full_rotations = 0; // Total top shaft rotations
-
-    float frequency = 1000;
+    // Position
+    int16_t angle;             // Current encoder angle (raw counts or scaled)
+    float top_shaft_angle;     // Accumulated angle (degrees for GM6020/M3508, radians for DMJ4310)
+    
+    // Velocity
+    int16_t rpm;               // Current speed (RPM)
+    
+    // Torque/Current
+    int16_t current;           // Current torque or current
+    
+    // Status
+    uint8_t temperature;       // Motor temperature (°C)
+    uint32_t last_update;      // Last feedback timestamp (ms)
 };
 
 enum class MotorType { GM6020 = 0, M3508 = 1, DMJ4310 = 2 };

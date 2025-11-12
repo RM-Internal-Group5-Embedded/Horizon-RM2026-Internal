@@ -64,13 +64,6 @@ GM6020Functions   * gm6020_motor_p  = nullptr;  // Small claw (ID 7)
 M3508Functions    * s_m3508_claw_p  = nullptr;  // Medium (ID 5)
 DMJ4310Functions  * dmj4310_motor_p = nullptr;  // Base claw (ID 5)
 
-// Store last received ID for debugging
-static volatile uint16_t s_lastCanId = 0;
-static volatile uint8_t s_m3508_feedback_count[4] = {0, 0, 0, 0}; // Count feedback from each M3508
-static volatile uint16_t s_canIdHistory[16] = {0}; // Circular buffer of last 16 CAN IDs
-static volatile uint8_t s_canIdIndex = 0;
-
-// Simple FDCAN callbacks
 extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs) {
   if ((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) == 0) return;
   
@@ -79,28 +72,19 @@ extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxF
   
   if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK) {
     uint16_t id = (uint16_t)rxHeader.Identifier;
-    s_lastCanId = id;
-    
-    // Store in circular buffer
-    s_canIdHistory[s_canIdIndex] = id;
-    s_canIdIndex = (s_canIdIndex + 1) % 16;
     
     // Dispatch based on motor ID
     switch (id) {
       case 0x201:  // M3508 motor 1
-        s_m3508_feedback_count[0]++;
         if (motor_l_f_p) motor_l_f_p->readMotorFeedback(rxData);
         break;
       case 0x202:  // M3508 motor 2
-        s_m3508_feedback_count[1]++;
         if (motor_r_f_p) motor_r_f_p->readMotorFeedback(rxData);
         break;
       case 0x203:  // M3508 motor 3
-        s_m3508_feedback_count[2]++;
         if (motor_l_b_p) motor_l_b_p->readMotorFeedback(rxData);
         break;
       case 0x204:  // M3508 motor 4
-        s_m3508_feedback_count[3]++;
         if (motor_r_b_p) motor_r_b_p->readMotorFeedback(rxData);
         break;
       case 0x205:  // M3508 motor 4
@@ -114,11 +98,7 @@ extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxF
       // GM6020 feedback IDs: 0x205-0x20B for motor IDs 1-7
       
       case 0x20B:  // GM6020 motor ID 7 (small claw)
-        {
-          static volatile uint32_t s_gm6020_feedback_count = 0;
-          s_gm6020_feedback_count++;  // Track feedback messages
-          if (gm6020_motor_p) gm6020_motor_p->readMotorFeedback(rxData);
-        }
+        if (gm6020_motor_p) gm6020_motor_p->readMotorFeedback(rxData);
         break;
       default:
         break; // Unhandled CAN ID
@@ -126,35 +106,13 @@ extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxF
   }
 }
 
-// CAN error tracking
-static volatile uint32_t s_can_error_count = 0;
-static volatile uint32_t s_can_last_error = 0;
-static volatile uint32_t s_can_bus_off_count = 0;
-
 extern "C" void FDCAN1_ErrorStatusCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t ErrorStatusITs) {
-  s_can_error_count++;
-  s_can_last_error = ErrorStatusITs;
-  
-  // Check for bus-off condition (critical error)
+  // Check for bus-off condition (critical error) and attempt recovery
   if (ErrorStatusITs & FDCAN_FLAG_BUS_OFF) {
-    s_can_bus_off_count++;
-    
-    // Attempt automatic recovery from bus-off
     if (HAL_FDCAN_Stop(hfdcan) == HAL_OK) {
-      // Wait a bit before restarting
       HAL_Delay(10);
       HAL_FDCAN_Start(hfdcan);
     }
-  }
-  
-  // Check for error warning (accumulating errors)
-  if (ErrorStatusITs & FDCAN_FLAG_ERROR_WARNING) {
-    // High error rate detected - could log or reduce CAN traffic
-  }
-  
-  // Check for error passive (serious error accumulation)
-  if (ErrorStatusITs & FDCAN_FLAG_ERROR_PASSIVE) {
-    // Very high error rate - may need to reset system
   }
 }
 
@@ -180,14 +138,6 @@ void updateERTask(void *pvPara) {
   }
   
   while (true) {
-    // Debug: indicate state with LEDs
-    // LED1 ON = data valid, OFF = invalid
-    if (g_uart.isDataValid()) {
-      HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);
-    } else {
-      HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
-    }
-
     // Check for motor timeouts (no feedback for >100ms = disconnected)
     uint32_t current_time = HAL_GetTick();
     bool motor_timeout = false;
@@ -227,7 +177,31 @@ void updateClawTask(void *pvPara) {
   if (!motors_initialized) {
     vTaskDelay(pdMS_TO_TICKS(200)); // Wait for CAN to stabilize
     
+    // Enable DMJ4310 motor
     dmj4310_motor_p->enableMotor();
+    vTaskDelay(pdMS_TO_TICKS(100)); // Wait for motor to enable (LED should turn green)
+    
+    // Set current DMJ4310 position as zero reference
+    // Zero position command: 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFE
+    uint8_t zero_cmd[8] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE};
+    extern FDCAN_HandleTypeDef hfdcan1;
+    FDCAN_TxHeaderTypeDef zero_header;
+    zero_header.Identifier = 1;  // DMJ4310 CAN ID
+    zero_header.IdType = FDCAN_STANDARD_ID;
+    zero_header.TxFrameType = FDCAN_DATA_FRAME;
+    zero_header.DataLength = FDCAN_DLC_BYTES_8;
+    zero_header.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+    zero_header.BitRateSwitch = FDCAN_BRS_OFF;
+    zero_header.FDFormat = FDCAN_CLASSIC_CAN;
+    zero_header.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+    zero_header.MessageMarker = 0;
+    
+    HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &zero_header, zero_cmd);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    
+    // Reset internal tracking in motor object so position starts at zero
+    dmj4310_motor_p->resetData();
+    
     // Send initial zero commands to GM6020 and M3508 claw motors
     gm6020_motor_p->sendCurrent(0);
     s_m3508_claw_p->sendCurrent(0);
@@ -239,7 +213,7 @@ void updateClawTask(void *pvPara) {
     uint32_t current_time = HAL_GetTick();
     
     // Check for claw motor timeouts (no feedback for >100ms = disconnected)
-    bool claw_timeout = false;
+    volatile static bool claw_timeout = false;
     if (gm6020_motor_p && (current_time - gm6020_motor_p->motor_feedback.last_update > 100)) 
       claw_timeout = true;
     
@@ -256,10 +230,10 @@ void updateClawTask(void *pvPara) {
     } else {
       // Normal operation: Update claw state and motors
       er_claw_control_p->switchState(g_uart.getReceivedValue());
-      er_claw_control_p->update();
+      er_claw_control_p->update(g_uart.getReceivedValue());
     }
     
-    vTaskDelay(pdMS_TO_TICKS(10));  // 100Hz for smooth DMJ4310 feedback
+    vTaskDelay(pdMS_TO_TICKS(5));  // 100Hz for smooth DMJ4310 feedback
   }
 }
 
@@ -340,11 +314,11 @@ void startUserTasks() {
                     uxUartTaskStack, &xUartTaskTCB);
   
   // Create ER chassis update task (medium priority)
-  xTaskCreateStatic(updateERTask, "Chassis_Task", configMINIMAL_STACK_SIZE * 6, NULL, 2,
+  xTaskCreateStatic(updateERTask, "Chassis_Task", configMINIMAL_STACK_SIZE * 6, NULL, 4,
                     uxERTaskStack, &xERTaskTCB);
   
   // Create claw update task (lower priority, runs at 50Hz)
-  xTaskCreateStatic(updateClawTask, "Claw_Task", configMINIMAL_STACK_SIZE * 8, NULL, 1,
+  xTaskCreateStatic(updateClawTask, "Claw_Task", configMINIMAL_STACK_SIZE * 8, NULL, 5,
                     uxClawTaskStack, &xClawTaskTCB);
   
   /**

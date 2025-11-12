@@ -17,26 +17,27 @@ protected:
     FDCAN_FilterTypeDef filter;
     FDCAN_TxHeaderTypeDef txHeader;
     uint8_t data[8];
-    float pid_integral = 0;
-    float pid_prev_error = 0;
-    float pid_error = 0;
-    
     int8_t motor_id = 0;
-    float pid_output = 0;
+    
+    // Internal state tracking
     int16_t prev_angle = 0;
     int32_t total_motor_counts = 0;
-
-    uint32_t current_time = 0;
+    
+    // PID control state
+    float pid_integral = 0;
+    float pid_prev_error = 0;
     uint32_t last_time = 0;
 
 public:
-    int8_t choice = 1;
+    // Essential feedback data
+    Modules::DJIMotors::MotorFeedback motor_feedback;
+    
+    // PID gains (public for tuning)
     float RPM_KP = 150.0f;
     float RPM_KI = 0.1f;  
     float RPM_KD = 10.0f;
-    uint16_t MAX_CURRENT = 16000;
-
-    Modules::DJIMotors::MotorFeedback motor_feedback;
+    float ANGLE_KP = 150.0f;
+    int16_t MAX_CURRENT = 16000;
 
     MotorFunctions(int id,  pFDCAN_RxFifo0CallbackTypeDef       callback, 
                             pFDCAN_ErrorStatusCallbackTypeDef   errorCallback);
@@ -52,8 +53,8 @@ public:
     void stopLoop();
 
     // Calculate PID output and optionally send
-    int16_t setRpmPID(int16_t target_rpm, float dt, bool send = false);
-    int16_t setAnglePID(float target_angle, float dt, bool send = false);
+    virtual int16_t setRpmPID(int16_t target_rpm, float dt, bool send = false);
+    virtual int16_t setAnglePID(float target_angle, float dt, bool send = false);
 
     void setRpm(int16_t target_rpm);
     void setAngle(float target_angle);
@@ -161,11 +162,14 @@ class GM6020Functions : public MotorFunctions {
 private:
     public:
     bool initialized = false;
+    float maxRpm = 60;
     GM6020Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callback, 
                             pFDCAN_ErrorStatusCallbackTypeDef errorCallback,
                             uint16_t filterID2, uint16_t filterID1);
 
     void readMotorFeedback(uint8_t rxData[8]) override;
+
+    int16_t setAnglePID(float target_angle, float dt, bool send);
 };
 
 #endif // MOTORFUNCTIONS_HPP

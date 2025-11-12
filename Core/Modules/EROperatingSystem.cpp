@@ -96,9 +96,9 @@ void ERStatusControl::traversal( uint16_t joystick_r_x, uint16_t joystick_r_y,
 
     // Mecanum mix
     front_left_rpm  = static_cast<int16_t>(ry + rx + lx);
-    front_right_rpm = static_cast<int16_t>(ry - rx - lx);
+    front_right_rpm = -static_cast<int16_t>(ry - rx - lx);
     back_left_rpm   = static_cast<int16_t>(ry - rx + lx);
-    back_right_rpm  = static_cast<int16_t>(ry + rx - lx);
+    back_right_rpm  = -static_cast<int16_t>(ry + rx - lx);
 
     // Calculate timing
     static uint32_t last_time = 0;
@@ -166,16 +166,6 @@ void ERStatusControl::sendMotorCurrents(int16_t curr_lf, int16_t curr_rf, int16_
     extern FDCAN_HandleTypeDef hfdcan1;
     uint8_t data[8];
     
-    // Debug: Store last sent currents AND raw data for inspection
-    static volatile int16_t s_last_curr_lf = 0;
-    static volatile int16_t s_last_curr_rf = 0;
-    static volatile int16_t s_last_curr_lb = 0;
-    static volatile int16_t s_last_curr_rb = 0;
-    static volatile uint8_t s_last_data[8] = {0};
-    s_last_curr_lf = curr_lf;
-    s_last_curr_rf = curr_rf;
-    s_last_curr_lb = curr_lb;
-    s_last_curr_rb = curr_rb;
     
     // Manually pack all 4 motors into the data array
     // Motor 1 (front-left) → bytes 0-1
@@ -193,11 +183,6 @@ void ERStatusControl::sendMotorCurrents(int16_t curr_lf, int16_t curr_rf, int16_
     // Motor 4 (back-right) → bytes 6-7
     data[6] = (curr_rb >> 8) & 0xFF;
     data[7] = curr_rb & 0xFF;
-    
-    // Store data for debugging
-    for (int i = 0; i < 8; i++) {
-        s_last_data[i] = data[i];
-    }
     
     // Send using pre-initialized TX header (0x200)
     // Check if TX FIFO has space before sending
@@ -286,7 +271,7 @@ void ERClawControl::idleMode() {
     sendClawCurrents(0, 0);
 }
 
-void ERClawControl::claspMode() {
+void ERClawControl::claspMode(const uartdriver::ReceivedValue& received_data) {
     static uint32_t last_time = 0;
     uint32_t current_time = HAL_GetTick();
     
@@ -301,33 +286,24 @@ void ERClawControl::claspMode() {
     
     int16_t gm6020_current = 0;
     int16_t m3508_current = 0;
-    
-    // Debug: store angle info
-    static volatile float s_gm6020_current_angle = 0;
-    static volatile float s_gm6020_target_angle = 0;
-    static volatile int16_t s_gm6020_rpm = 0;
-    static volatile int16_t s_gm6020_output = 0;
+
+    float gm6020degree = 45*(static_cast<float>(received_data.channel_6) - CENTER) / SBUS_SPAN;
     
     // DMJ4310 base claw control - CLASP MODE: go to 720° (top shaft angle)
     // 1:1 ratio - 720° = 4π radians ≈ 12.566 radians
     if (claw_motors.base_claw) {
         // 720° = 4π radians (within ±12.5 rad range)
-        float motor_position = 4.0f * 3.14159265f;  // ~12.566 radians = 720°
+        float motor_position = 4*3.14159265f;  // ~12.566 radians = 720°
         // MIT command: position=12.566 rad, velocity=0, kp=50, kd=2, torque=0
-        claw_motors.base_claw->sendMITCommand(motor_position, 0.1f, 
+        claw_motors.base_claw->sendMITCommand(motor_position, 0.0001f, 
                                 claw_motors.base_claw->RPM_KP, 
                                 claw_motors.base_claw->RPM_KD, 
                                 claw_motors.base_claw->RPM_KI);
     }
     
     if (claw_motors.small_claw) {
-        s_gm6020_current_angle = claw_motors.small_claw->motor_feedback.top_shaft_angle;
-        s_gm6020_target_angle = 720.0f;
-        s_gm6020_rpm = claw_motors.small_claw->motor_feedback.rpm;
-        
         // Use PID to reach 720 degrees (2 full rotations)
-        gm6020_current = claw_motors.small_claw->setAnglePID(720.0f, dt, false);
-        s_gm6020_output = gm6020_current;
+        gm6020_current = claw_motors.small_claw->setAnglePID(112.5f + gm6020degree, dt, false);
     }
     
     if (claw_motors.m3508_claw) {
@@ -338,7 +314,7 @@ void ERClawControl::claspMode() {
     sendClawCurrents(gm6020_current, m3508_current);
 }
 
-void ERClawControl::releaseMode() {
+void ERClawControl::releaseMode(const uartdriver::ReceivedValue& received_data) {
     static uint32_t last_time = 0;
     uint32_t current_time = HAL_GetTick();
     
@@ -356,7 +332,7 @@ void ERClawControl::releaseMode() {
         // 0° top shaft = 0° motor = 0 radians
         float motor_position = 0.0f;  // Return to zero
         // MIT command: position=12.566 rad, velocity=0, kp=50, kd=2, torque=0
-        claw_motors.base_claw->sendMITCommand(motor_position, 0.1f, 
+        claw_motors.base_claw->sendMITCommand(motor_position, 0.01f, 
                                 claw_motors.base_claw->RPM_KP, 
                                 claw_motors.base_claw->RPM_KD, 
                                 claw_motors.base_claw->RPM_KI);
@@ -388,17 +364,17 @@ void ERClawControl::switchState(const uartdriver::ReceivedValue& received_data) 
     }
 }
 
-void ERClawControl::update() {
+void ERClawControl::update(const uartdriver::ReceivedValue& received_data) {
     // Call appropriate mode method based on current state
     switch (current_state) {
         case ClawState::IDLE:
             idleMode();
             break;
         case ClawState::CLASP:
-            claspMode();
+            claspMode(received_data);
             break;
         case ClawState::RELEASE:
-            releaseMode();
+            releaseMode(received_data);
             break;
         default:
             idleMode();
@@ -407,11 +383,6 @@ void ERClawControl::update() {
 }
 
 void ERClawControl::sendClawCurrents(int16_t gm6020_current, int16_t m3508_current) {
-    // Debug: Store last sent claw currents
-    static volatile int16_t s_last_gm6020_curr = 0;
-    static volatile int16_t s_last_m3508_curr = 0;
-    s_last_gm6020_curr = gm6020_current;
-    s_last_m3508_curr = m3508_current;
     
     // Use motor's own sendCurrent method (handles all the packing internally)
     if (claw_motors.small_claw) {

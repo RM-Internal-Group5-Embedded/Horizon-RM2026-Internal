@@ -137,9 +137,9 @@ public:
     
     void idleMode();
     
-    void claspMode();
+    void claspMode(const uartdriver::ReceivedValue& received_data);
     
-    void releaseMode();
+    void releaseMode(const uartdriver::ReceivedValue& received_data);
     
     void setState(ClawState state) {
         current_state = state;
@@ -150,7 +150,7 @@ public:
     }
     
     // Update claw motors based on state
-    void update();
+    void update(const uartdriver::ReceivedValue& received_data);
     
     // Send claw motor currents
     void sendClawCurrents(int16_t gm6020_current, int16_t m3508_current);

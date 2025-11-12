@@ -16,7 +16,7 @@ MotorFunctions::MotorFunctions(int id, pFDCAN_RxFifo0CallbackTypeDef callback,
     
 
     // Initialize timing/data
-    last_time = current_time = HAL_GetTick();
+    last_time = HAL_GetTick();
     resetData();
 
     // Note: Filter/callbacks now registered once in canbridge::init
@@ -81,19 +81,14 @@ void MotorFunctions::readMotorFeedback(uint8_t rxData[8]) {
 void MotorFunctions::resetData() {
     pid_integral = 0;
     pid_prev_error = 0;
-    pid_error = 0;
-    last_time = current_time = HAL_GetTick();
+    last_time = HAL_GetTick();
     prev_angle = 0;
     total_motor_counts = 0;
-    motor_feedback.target_angle = 0;
-    motor_feedback.target_rpm = 0;
 }
 
 void M3508Functions::readMotorFeedback(uint8_t rxData[8]) {
     int16_t current_angle = (rxData[0] << 8) | rxData[1];
     int32_t current = HAL_GetTick();
-    motor_feedback.frequency = 
-        1000.0f / (current - motor_feedback.last_update);
     // Handle wrap-around to track total motor rotation
     if(!initialized){
         initialized = true;
@@ -112,9 +107,7 @@ void M3508Functions::readMotorFeedback(uint8_t rxData[8]) {
     prev_angle = current_angle;
     // Store data
     motor_feedback.angle = current_angle;
-    
-    motor_feedback.bottom_rpm = ((rxData[2] << 8) | rxData[3]);
-    motor_feedback.rpm = (187.0f / 3591.0f) * motor_feedback.bottom_rpm;
+    motor_feedback.rpm = (rxData[2] << 8) | rxData[3];
     motor_feedback.current = (rxData[4] << 8) | rxData[5];
     motor_feedback.temperature = rxData[6];
     motor_feedback.last_update = current;
@@ -129,27 +122,13 @@ void M3508Functions::readMotorFeedback(uint8_t rxData[8]) {
 }
 
 void MotorFunctions::sendCurrent(int16_t current) {
-    // Debug: Store last sent data for inspection
-    static volatile int16_t s_last_motor_id = 0;
-    static volatile int16_t s_last_current = 0;
-    static volatile uint8_t s_last_tx_data[8] = {0};
-    
-    s_last_motor_id = motor_id;
-    s_last_current = current;
-    
     // Construct TX data and send directly
     Modules::DJIMotors::constructTxData(data, motor_id, current);
-    
-    // Store data for debugging
-    for (int i = 0; i < 8; i++) {
-        s_last_tx_data[i] = data[i];
-    }
-    
     Modules::DJIMotors::send(&txHeader, data);
 }
 
 void MotorFunctions::controlLoop(int choice, uint16_t magnitude) {
-    current_time = HAL_GetTick();
+    uint32_t current_time = HAL_GetTick();
     float dt = (current_time - last_time) / 1000.0f; // Update dt
     if (dt <= 0 || dt > 0.1f) dt = 0.01f; // Clamp
     
@@ -165,7 +144,7 @@ void MotorFunctions::stopLoop(){
 
 
 void MotorFunctions::setRpm(int16_t target_rpm){
-    current_time = HAL_GetTick();
+    uint32_t current_time = HAL_GetTick();
     float dt = (current_time - last_time) / 1000.0f; // Update dt
     if (dt <= 0 || dt > 0.1f) dt = 0.01f; // Clamp
 
@@ -174,17 +153,11 @@ void MotorFunctions::setRpm(int16_t target_rpm){
 }
 
 int16_t MotorFunctions::setRpmPID(int16_t target_rpm, float dt, bool send){
-    motor_feedback.target_rpm = target_rpm;
-    
-    // Read motor RPM atomically (motor_feedback.rpm is written by ISR)
-    uint32_t primask = __get_PRIMASK();
-    __disable_irq();
     int16_t current_rpm = motor_feedback.rpm;
-    __set_PRIMASK(primask);
     
     // Calculate PID
-    pid_output = Modules::PID::calculate(
-        (float)motor_feedback.target_rpm,
+    float pid_output = Modules::PID::calculate(
+        (float)target_rpm,
         (float)current_rpm,
         RPM_KP, RPM_KI, RPM_KD,
         pid_integral,
@@ -192,17 +165,17 @@ int16_t MotorFunctions::setRpmPID(int16_t target_rpm, float dt, bool send){
         dt
     );
     pid_output = Modules::PID::pidClampMinMax(pid_output, MAX_CURRENT);
-    motor_feedback.output_current = (int16_t)pid_output;
+    int16_t output = (int16_t)pid_output;
     
     if (send) {
-        sendCurrent(motor_feedback.output_current);
+        sendCurrent(output);
     }
     
-    return motor_feedback.output_current;
+    return output;
 }
 
 void MotorFunctions::setAngle(float target_angle){
-    current_time = HAL_GetTick();
+    uint32_t current_time = HAL_GetTick();
     float dt = (current_time - last_time) / 1000.0f; // Update dt
     if (dt <= 0 || dt > 0.1f) dt = 0.01f; // Clamp
 
@@ -211,17 +184,11 @@ void MotorFunctions::setAngle(float target_angle){
 }
 
 int16_t MotorFunctions::setAnglePID(float target_angle, float dt, bool send){
-    motor_feedback.target_angle = target_angle;
-    
-    // Read motor angle atomically (motor_feedback.top_shaft_angle is written by ISR)
-    uint32_t primask = __get_PRIMASK();
-    __disable_irq();
     float current_angle = motor_feedback.top_shaft_angle;
-    __set_PRIMASK(primask);
     
     // Calculate PID
-    pid_output = Modules::PID::calculate(
-        (float)motor_feedback.target_angle,
+    float pid_output = Modules::PID::calculate(
+        target_angle,
         current_angle,
         RPM_KP, RPM_KI, RPM_KD,
         pid_integral,
@@ -229,13 +196,13 @@ int16_t MotorFunctions::setAnglePID(float target_angle, float dt, bool send){
         dt
     );
     pid_output = Modules::PID::pidClampMinMax(pid_output, MAX_CURRENT);
-    motor_feedback.output_current = (int16_t)pid_output;
+    int16_t output = (int16_t)pid_output;
     
     if (send) {
-        sendCurrent(motor_feedback.output_current);
+        sendCurrent(output);
     }
     
-    return motor_feedback.output_current;
+    return output;
 }
 
 // Pack this motor's current into the correct position in the 8-byte array
@@ -251,8 +218,8 @@ void MotorFunctions::packCurrentIntoData(uint8_t* data, int16_t current) {
         return;  // Invalid motor ID
     }
     
-    data[offset] = (current >> 8) & 0xFF;
-    data[offset + 1] = current & 0xFF;
+        data[offset] = (current >> 8) & 0xFF;
+        data[offset + 1] = current & 0xFF;
 }
 
 // ========== DMJ4310 Implementation ==========
@@ -268,15 +235,13 @@ DMJ4310Functions::DMJ4310Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callbac
     // DMJ4310-specific PID tuning
     RPM_KP = 25.0f;    // Moderate P gain
     RPM_KI = 0.05f;    // Low integral to prevent windup
-    RPM_KD = 1.0f;     // Moderate derivative
+    RPM_KD = 0.4f;     // Moderate derivative
     MAX_CURRENT = 10000;  // Conservative current limit
 }
 
 void DMJ4310Functions::readMotorFeedback(uint8_t rxData[8]) {
     uint32_t current = HAL_GetTick();
     motor_feedback.last_update = current;
-    motor_feedback.frequency = 
-        1000.0f / (current - motor_feedback.last_update);
     
     // Extract motor ID and error code from D[0]
     rx_motor_id = rxData[0] & 0x0F;
@@ -325,7 +290,6 @@ void DMJ4310Functions::readMotorFeedback(uint8_t rxData[8]) {
     
     // Velocity in rad/s -> RPM
     motor_feedback.rpm = (int16_t)(velocity * 9.5493f); // rad/s to RPM
-    motor_feedback.bottom_rpm = motor_feedback.rpm;
     
     // Torque in Nm -> store as mNm (millinewton-meters) for precision
     motor_feedback.current = (int16_t)(torque * 1000.0f);
@@ -385,23 +349,9 @@ void DMJ4310Functions::sendMITCommand(float p_des, float v_des, float kp, float 
 void DMJ4310Functions::enableMotor() {
     // MIT Cheetah protocol: Enable motor command
     // Send: 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFC
-    
-    // Debug: Track enable attempts
-    static volatile uint32_t s_enable_count = 0;
-    static volatile uint8_t s_enable_data[8] = {0};
-    static volatile uint16_t s_enable_can_id = 0;
-    
-    s_enable_count++;
-    s_enable_can_id = txHeader.Identifier;
-    
     memset(data, 0xFF, 8);
     data[7] = 0xFC;
-    
-    // Store for debugging
-    for (int i = 0; i < 8; i++) s_enable_data[i] = data[i];
-    
     Modules::DJIMotors::send(&txHeader, data);
-    // Note: No delay - motor will respond when ready
 }
 
 void DMJ4310Functions::disableMotor() {
@@ -469,16 +419,16 @@ GM6020Functions::GM6020Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callback,
     // GM6020 in current mode - uses voltage command format but interprets as current
     // Command range is still ±25000 (voltage range) but represents current
     // PID values for angle control (tuned to prevent overshoot/oscillation)
-    RPM_KP = 30.0f;      // Reduced proportional gain to prevent overshoot
-    RPM_KI = 0.01f;      // Very small integral to prevent windup
-    RPM_KD = 0.5f;       // Reduced derivative for smooth damping
-    MAX_CURRENT = 8000;  // Reduced current limit for smoother control
+    RPM_KP = 12.0f;      // Reduced proportional gain to prevent overshoot
+    RPM_KI = 10.0f;      // Very small integral to prevent windup
+    RPM_KD = 0.01f;       // Reduced derivative for smooth damping
+    ANGLE_KP = 25.0f;
+    MAX_CURRENT = 15000;  // Reduced current limit for smoother control (16384)
 }
 
 void GM6020Functions::readMotorFeedback(uint8_t rxData[8]) {
     int16_t current_angle = (rxData[0] << 8) | rxData[1];
     int32_t current = HAL_GetTick();
-    motor_feedback.frequency = 1000.0f / (current - motor_feedback.last_update);
     
     // On first feedback, initialize prev_angle to avoid offset
     if(!initialized){
@@ -504,6 +454,33 @@ void GM6020Functions::readMotorFeedback(uint8_t rxData[8]) {
     motor_feedback.current = (rxData[4] << 8) | rxData[5];
     motor_feedback.temperature = rxData[6];
     motor_feedback.last_update = current;
+}
+
+int16_t GM6020Functions::setAnglePID(float target_angle, float dt, bool send){
+    
+    // Cascaded PID: Angle → RPM → Current
+    // Step 1: Calculate angle error and convert to target RPM
+    float angle_error = target_angle - motor_feedback.top_shaft_angle;
+    
+    // Add deadband to prevent micro-oscillations near target
+    if (fabsf(angle_error) < 5.0f) {  // 2° deadband
+        angle_error = 0.0f;
+    }
+    
+    float target_rpm = angle_error * ANGLE_KP;  // Proportional conversion to RPM
+    
+    // Step 2: Limit target RPM to maxRpm
+    if (target_rpm > maxRpm) {
+        target_rpm = maxRpm;
+    } else if (target_rpm < -maxRpm) {
+        target_rpm = -maxRpm;
+    }
+    
+    // Step 3: Use RPM PID to convert target RPM to current
+    // This uses RPM_KP, RPM_KI, RPM_KD for velocity control
+    int16_t output = setRpmPID((int16_t)target_rpm, dt, send);
+    
+    return output;
 }
 
 

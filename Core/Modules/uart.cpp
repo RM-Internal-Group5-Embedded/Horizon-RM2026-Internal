@@ -44,7 +44,6 @@ namespace uartdriver
     {
         uart_heartbeat_.last_receive_tick = xTaskGetTickCount();
         uart_heartbeat_.is_triggered = 0;
-        HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);  // 使用已定义的LED
     }
 
     void Uart::checkHeartbeat() //检测心跳，（这个需要被扔到loop里反复检测）
@@ -55,6 +54,16 @@ namespace uartdriver
                 uart_heartbeat_.is_triggered = 1;
                 triggerHeartbeat();
                 resetDma();
+            } else {
+                // Already triggered - periodically retry DMA reset for reconnection
+                static TickType_t last_retry_tick = 0;
+                TickType_t current_tick = xTaskGetTickCount();
+                
+                // Retry every 500ms while disconnected
+                if (current_tick - last_retry_tick >= pdMS_TO_TICKS(500)) {
+                    resetDma();  // Keep trying to restart DMA for reconnection
+                    last_retry_tick = current_tick;
+                }
             }
         }
     }
@@ -106,17 +115,34 @@ namespace uartdriver
         received_value_.frame_lost = 0;
         received_value_.fail_act = 0;
         received_value_.footer = 0;
-
-        HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);  // 使用已定义的LED
     }
 
     void Uart::resetDma() //重置DMA
     {
         if (!dma_resetting_) {
             dma_resetting_ = 1;
-            HAL_UART_AbortReceive(&huart3);
-            HAL_UARTEx_ReceiveToIdle_DMA(&huart3, sbus_buf_, SBUS_DMA_BUF_LEN);
-            __HAL_DMA_DISABLE_IT(huart3.hdmarx, DMA_IT_HT);
+            
+            // Fully reset the DMA and UART to recover from power loss
+            HAL_UART_DMAStop(&huart3);  // Stop DMA completely
+            HAL_UART_AbortReceive(&huart3);  // Abort any ongoing reception
+            
+            // Clear any error flags
+            __HAL_UART_CLEAR_FLAG(&huart3, UART_CLEAR_PEF | UART_CLEAR_FEF | 
+                                           UART_CLEAR_NEF | UART_CLEAR_OREF);
+            
+            // Restart DMA reception
+            HAL_StatusTypeDef status = HAL_UARTEx_ReceiveToIdle_DMA(&huart3, sbus_buf_, SBUS_DMA_BUF_LEN);
+            
+            // If restart failed, try one more time
+            if (status != HAL_OK) {
+                HAL_Delay(10);  // Brief delay
+                HAL_UARTEx_ReceiveToIdle_DMA(&huart3, sbus_buf_, SBUS_DMA_BUF_LEN);
+            }
+            
+            if (huart3.hdmarx != NULL) {
+                __HAL_DMA_DISABLE_IT(huart3.hdmarx, DMA_IT_HT);
+            }
+            
             dma_resetting_ = 0;
         }
     }
