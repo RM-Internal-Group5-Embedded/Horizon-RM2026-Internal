@@ -25,6 +25,7 @@ namespace mpu6500
         // 计算出的倾角（单位：度）
         float pitch;  // 俯仰角（前后倾斜）
         float roll;   // 横滚角（左右倾斜）
+        float yaw;    // 偏航角（水平转向）
     };
     
     class MPU6500
@@ -51,6 +52,10 @@ namespace mpu6500
         // 获取当前倾角
         float getPitch() const { return pitch_; }
         float getRoll() const { return roll_; }
+        float getYaw() const { return yaw_; }
+        
+        // 重置yaw角（用于消除累积漂移）
+        void resetYaw() { yaw_ = 0.0f; }
         
     private:
         // 陀螺仪零点偏移
@@ -61,6 +66,7 @@ namespace mpu6500
         // 倾角（互补滤波结果）
         float pitch_;
         float roll_;
+        float yaw_;
         
         // 转换系数
         float gyro_scale_;

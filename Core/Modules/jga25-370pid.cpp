@@ -104,7 +104,7 @@ namespace arpid
         }
         
         // 读取传感器
-        current_angle_ = -mpu_->getPitch(); 
+        current_angle_ = mpu_->getPitch();
         current_velocity_ = encoder_->getLinearVelocity();
         
         // 速度环（外环）

@@ -31,6 +31,7 @@ namespace mpu6500
         , gyro_offset_z_(0.0f)
         , pitch_(0.0f)
         , roll_(0.0f)
+        , yaw_(0.0f)
     {
         // 2000度/秒量程
         gyro_scale_ = 2000.0f / 32768.0f;
@@ -110,6 +111,7 @@ namespace mpu6500
         // 陀螺仪积分（高频准确，低频漂移）
         pitch_ += data.gyro_y * dt;
         roll_ += data.gyro_x * dt;
+        yaw_ += data.gyro_z * dt;
         
         // 与加速度计融合（低频准确，高频噪声）
         float alpha = 0.98f;  // 互补滤波系数（陀螺仪权重）
@@ -118,6 +120,7 @@ namespace mpu6500
         
         data.pitch = pitch_;
         data.roll = roll_;
+        data.yaw = yaw_;
         
         return true;
     }
