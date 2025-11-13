@@ -75,6 +75,10 @@ void Error_Handler(void);
 #define MPU6500_MISO_GPIO_Port GPIOA
 #define MPU6500_MOSI_Pin GPIO_PIN_7
 #define MPU6500_MOSI_GPIO_Port GPIOA
+#define sensor_3_Pin GPIO_PIN_1
+#define sensor_3_GPIO_Port GPIOB
+#define sensor_4_Pin GPIO_PIN_2
+#define sensor_4_GPIO_Port GPIOB
 #define jga_left_backward_Pin GPIO_PIN_10
 #define jga_left_backward_GPIO_Port GPIOB
 #define jga_right_backward_Pin GPIO_PIN_11
@@ -87,10 +91,6 @@ void Error_Handler(void);
 #define jga_left_speed_GPIO_Port GPIOB
 #define jga_right_speed_Pin GPIO_PIN_15
 #define jga_right_speed_GPIO_Port GPIOB
-#define jga_left_encoder_A_Pin GPIO_PIN_11
-#define jga_left_encoder_A_GPIO_Port GPIOA
-#define jga_left_encoder_B_Pin GPIO_PIN_12
-#define jga_left_encoder_B_GPIO_Port GPIOA
 #define servo_0_Pin GPIO_PIN_15
 #define servo_0_GPIO_Port GPIOA
 #define servo_1_Pin GPIO_PIN_3
@@ -99,6 +99,10 @@ void Error_Handler(void);
 #define jga_right_encoder_A_GPIO_Port GPIOB
 #define jga_right_encoder_B_Pin GPIO_PIN_5
 #define jga_right_encoder_B_GPIO_Port GPIOB
+#define jga_left_encoder_A_Pin GPIO_PIN_6
+#define jga_left_encoder_A_GPIO_Port GPIOB
+#define jga_left_encoder_B_Pin GPIO_PIN_7
+#define jga_left_encoder_B_GPIO_Port GPIOB
 #define ws2812_Pin GPIO_PIN_9
 #define ws2812_GPIO_Port GPIOB
 

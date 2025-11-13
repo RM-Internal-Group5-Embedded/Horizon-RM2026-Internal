@@ -63,7 +63,7 @@ arpid::AR ar_left(&motor_left, &encoder_left, &mpu);
 arpid::AR ar_right(&motor_right, &encoder_right, &mpu);
 
 // 任务栈和控制块
-// // AR控制任务栈
+// AR控制任务栈
 StackType_t uxARTaskStack[configMINIMAL_STACK_SIZE * 3];  // 384字节栈
 StaticTask_t xARTaskTCB;
 
@@ -75,9 +75,9 @@ StaticTask_t xEncoderTaskTCB;
 StackType_t uxMpuTaskStack[configMINIMAL_STACK_SIZE * 4];  // 512字节栈
 StaticTask_t xMpuTaskTCB;
 
-// PWM控制任务栈（已禁用，如需测试可取消注释）
-StackType_t uxPWMTaskStack[configMINIMAL_STACK_SIZE * 2];  // 256字节栈
-StaticTask_t xPWMTaskTCB;
+// PWM控制任务栈
+// StackType_t uxPWMTaskStack[configMINIMAL_STACK_SIZE * 2];  // 256字节栈
+// StaticTask_t xPWMTaskTCB;
 
 // AR控制任务函数（双电机）
 void arTask(void *pvPara) {
@@ -89,7 +89,7 @@ void arTask(void *pvPara) {
   ar_left.init();
   ar_right.init();
   
-  // 等待3秒（等待陀螺仪校准完成）
+  // 等待陀螺仪校准完成
   vTaskDelay(pdMS_TO_TICKS(3000));
   
   // 自动启动AR控制
@@ -202,17 +202,17 @@ void mpuTask(void *pvPara) {
  * @todo  Add your own task in this file
  */
 void startUserTasks() {
-  // 创建编码器读取任务 - 优先级2
-  xTaskCreateStatic(encoderTask, "Encoder_Task", configMINIMAL_STACK_SIZE * 3, NULL, 2,
-                    uxEncoderTaskStack, &xEncoderTaskTCB);
+  // 创建MPU6500任务 - 优先级12（最高，姿态数据最关键）
+  xTaskCreateStatic(mpuTask, "MPU_Task", configMINIMAL_STACK_SIZE * 4, NULL, 12,
+                    uxMpuTaskStack, &xMpuTaskTCB);
   
-  // // 创建AR控制任务 - 优先级4
-  xTaskCreateStatic(arTask, "AR_Task", configMINIMAL_STACK_SIZE * 3, NULL, 4,
+  // 创建AR控制任务 - 优先级10（次高，平衡控制）
+  xTaskCreateStatic(arTask, "AR_Task", configMINIMAL_STACK_SIZE * 3, NULL, 10,
                     uxARTaskStack, &xARTaskTCB);
   
-  // 创建MPU6500任务 - 优先级5
-  xTaskCreateStatic(mpuTask, "MPU_Task", configMINIMAL_STACK_SIZE * 4, NULL, 5,
-                    uxMpuTaskStack, &xMpuTaskTCB);
+  // 创建编码器读取任务 - 优先级8（较高，速度反馈）
+  xTaskCreateStatic(encoderTask, "Encoder_Task", configMINIMAL_STACK_SIZE * 3, NULL, 8,
+                    uxEncoderTaskStack, &xEncoderTaskTCB);
   
   // 如果需要手动PWM控制（用于测试），取消注释下面的任务
   // xTaskCreateStatic(pwmTask, "PWM_Task", configMINIMAL_STACK_SIZE * 2, NULL, 3,
