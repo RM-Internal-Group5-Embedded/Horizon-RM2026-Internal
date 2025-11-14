@@ -18,11 +18,13 @@ import numpy as np
 #os.path.dirname(__file__) = 找到这个文件所在的文件夹
 #os.path.join(文件夹, 'config') = 在这个文件夹里创建一个叫config的子文件夹
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'config')#'config'文件夹路径
-REGIONS_PATH = os.path.join(CONFIG_PATH, 'regions_view.json')#'regions_view.json'文件路径
+COLOR_PLATE_PATH = os.path.join(CONFIG_PATH, 'color_plate_region.json')#'color_plate_region.json'文件路径
+BLOCK_REGIONS_PATH = os.path.join(CONFIG_PATH, 'block_regions_view.json')#'regions_view.json'文件路径
 
 regions = []    # 存放所有画好的区域
 current = []    # 存放正在画的区域
 frozen = None   # 存放暂停时的画面
+mode = None     # 当前模式：'block' 或 'color'
 
 #event:鼠标动作（点击、移动等） x, y :鼠标点击的坐标位置
 #param:是否冻结画面
@@ -40,10 +42,33 @@ def draw_poly(img,pts,color):
     for p in pts:
         cv2.circle(img,tuple(p),4,color,-1)
 
-    
+def select_mode():
+    print("请选择模式：")
+    print("1. block detect - 绘制4个区域")
+    print("2. color plate - 绘制1个区域")
+
+    while True:
+        choice = input("请输入 1 或 2: ").strip()
+        if choice == '1':
+            return 'block'
+        elif choice == '2':
+            return 'color'
+        else:
+            print("输入无效，请重新输入")
+
+def get_mode_requirements() :
+    if mode == 'block':
+        return 4, "方块检测区域"
+    else:
+        return 1, "颜色板区域"
+
 def main():
+    global frozen, regions, current, mode
     os.makedirs(CONFIG_PATH,exist_ok=True)
     capture=cv2.VideoCapture(0)
+
+    mode = select_mode()
+    target_count, mode_name = get_mode_requirements()
 
     if capture.isOpened():
         print("USB相机连接成功")
@@ -54,15 +79,16 @@ def main():
     capture.set(cv2.CAP_PROP_FRAME_HEIGHT,720)
     capture.set(cv2.CAP_PROP_FRAME_WIDTH,1280)#设置相机采集分辨率 还要看是否支持
 
+    print(f"\n{mode_name}绘制模式")
     print("按空格冻结当前帧,用鼠标依次点击顶点绘制一个区域 (大于等于3个点)")
-    print("按 n 确认当前区域并开始下一个,共4个;按 u 撤销一点")
+    print(f"按 n 确认当前区域并开始下一个,共{target_count}个;按 u 撤销一点")
     print("按 s 保存全部4个区域;按 r 重新冻结;按 q 退出")
 
-    cv2.namedWindow('regions_view')
+    cv2.namedWindow(f'{mode_name}绘制')
     #设置鼠标监听，当在窗口里点击时调用mouse函数
     #cv2.setMouseCallback(窗口名, 回调函数, 参数)
     #mouse 只能通过 param 参数传一个数据
-    cv2.setMouseCallback('regions_view',on_mouse, param=None)
+    cv2.setMouseCallback(f'{mode_name}绘制',on_mouse, param=None)
 
     while True:
         if frozen is None:
@@ -83,7 +109,7 @@ def main():
 
             #只有三个点以上才标注
             if len(poly)>=3:
-                text='R'+chr(index+1+ord('A'))
+                text='R'+chr(index+1+ord('0'))
                 #绘制字符串 画布，字符串，坐标，字体序号，缩放系数，颜色，粗细，线条类型(以下实线)
                 cv2.putText(canvas,text, tuple(poly[0]),0,0.7,(0,255,0),2,1)
 
@@ -91,7 +117,7 @@ def main():
         draw_poly(canvas,current,(255,0,0))
 
         #按键处理
-        cv2.imshow('regions_view',canvas)
+        cv2.imshow(f'{mode_name}绘制',canvas)
         key = cv2.waitKey(1) & 0xFF #只取键盘码
 
         #按空格冻结当前帧,用鼠标依次点击顶点绘制一个区域 (大于等于3个点)
@@ -105,29 +131,43 @@ def main():
             if ret:
                 frozen=frame.copy()
                 current=[]
-                cv2.setMouseCallback('regions_view',on_mouse, frozen)
+                cv2.setMouseCallback(f'{mode_name}绘制',on_mouse, frozen)
         if key==ord('u'):
             if current:
                 current.pop()
         if key==ord('n'):
             if len(current)>=3:
-                regions.append(current.copy())#必须用copy 存储地址
+                if mode == 'color' and len(regions) >= 1:
+                    # color模式只允许一个区域，替换之前的
+                    regions = [current.copy()]
+                else:
+                    regions.append(current.copy())#必须用copy 存储地址
                 current=[]
+                print(f"区域确认，已完成 {len(regions)}/{target_count}")
+                
+                # color模式确认一个区域后自动完成
+                if mode == 'color' and len(regions) == 1:
+                    print("颜色板区域已确认，按's'保存或按'q'退出")
             else:
                 print("当前区域至少需要三个点")
         if key==ord('r'):
             frozen=None
             current=[]
-            cv2.setMouseCallback('regions_view', on_mouse, None)
+            cv2.setMouseCallback(f'{mode_name}绘制', on_mouse, None)
             #setMouseCallback 是“重新绑定鼠标行为”: 改变param 或 重启绘制时才需要！
         if key==ord('s'):
-            if len(regions)==4:
+            if mode == 'block' and len(regions) == target_count:
                 #json格式写入文件
-                with open(REGIONS_PATH,'w') as f:
+                with open(BLOCK_REGIONS_PATH,'w') as f:
                     json.dump({'regions':regions},f)
-                print("已保存")
+                print(f"已保存{target_count}个方块检测区域到 {BLOCK_REGIONS_PATH}")
+            elif mode == 'color' and len(regions) == target_count:
+                with open(COLOR_PLATE_PATH,'w') as f:
+                    json.dump({'region':regions[0]},f)
+                print(f"已保存颜色板区域到 {COLOR_PLATE_PATH}")
             else:
-                print("需要绘制4个区域后再保存")
+                print(f"需要绘制{target_count}个区域后再保存，当前已绘制{len(regions)}个")
+    
     capture.release()
     cv2.destroyAllWindows()
 if __name__=='__main__':

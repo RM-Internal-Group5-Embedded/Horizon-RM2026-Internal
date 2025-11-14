@@ -6,13 +6,48 @@ import cv2
 import numpy as np
 import time
 from JC42BSending import JC24BTransceiver
+import serial.tools.list_ports
 
 CONFIG_DIR = os.path.join(os.path.dirname(__file__), 'config')
-REGIONS_PATH = os.path.join(CONFIG_DIR, 'regions_view.json')
+REGIONS_PATH = os.path.join(CONFIG_DIR, 'block_regions_view.json')
+
+
+def find_jc24b_port():
+    """自动查找可能的JC24B设备"""
+    possible_ports = []
+    
+    # 获取所有串口设备
+    ports = list(serial.tools.list_ports.comports())
+    
+    for port in ports:
+        print(f"发现设备: {port.device} - {port.description} - {port.hwid}")
+        
+        # 根据常见特征判断是否是JC24B
+        if any(keyword in port.description.upper() for keyword in ['JC24B', 'CH340', 'CP210', 'USB-SERIAL']):
+            return port.device
+        elif 'VID:PID=1A86:7523' in port.hwid:  # CH340芯片的常见VID:PID
+            return port.device
+        elif 'VID:PID=10C4:EA60' in port.hwid:  # CP210x芯片的常见VID:PID
+            return port.device
+    
+    # 如果没有自动识别到，让用户选择
+    if ports:
+        print("\n请选择JC24B设备:")
+        for i, port in enumerate(ports):
+            print(f"{i}: {port.device} - {port.description}")
+        
+        try:
+            choice = int(input("输入设备编号: "))
+            if 0 <= choice < len(ports):
+                return ports[choice].device
+        except:
+            pass
+    
+    return None
 
 def load_regions():
     if not os.path.exists(REGIONS_PATH):
-        print("缺少regions_view.json文件,需要先运行define_regions.py")
+        print("缺少block_regions_view.json文件,需要先运行define_regions.py")
         return []
     with open(REGIONS_PATH,'r') as f:
         data=json.load(f)
@@ -78,9 +113,22 @@ def main():
         print("USB相机连接失败")
         return 
     
-    # 创建 JC24BTransceiver 并尝试连接
-    transceiver=JC24BTransceiver(port='COM8')#哪个串口要检测一下
-    transceiver.connect()
+
+    # 自动查找JC24B设备
+    jc24b_port = find_jc24b_port()
+    if not jc24b_port:
+        print("未找到JC24B设备，请检查连接")
+        # 或者让用户手动输入
+        jc24b_port = input("请手动输入设备路径 (如 /dev/tty.usbserial-XXXX): ").strip()
+    
+    if jc24b_port:
+        print(f"尝试连接JC24B设备: {jc24b_port}")
+        transceiver = JC24BTransceiver(port=jc24b_port)
+        transceiver.start_communication()
+    else:
+        print("无法确定JC24B设备，将运行无通信版本")
+        transceiver = None
+
 
 
     prev_inside = [False]*len(regions)  #记录上一帧每个区域是否有block
@@ -129,26 +177,33 @@ def main():
                 if not ok:
                     print("首次发送失败，尝试重连并重发...")
                     # 尝试重连一次
-                    if transceiver.connect():
-                        time.sleep(0.05)
-                        ok2=transceiver.send_positions(positions)
-                        if ok2:
-                            print("重连后发送成功")
-                        else:
-                            print("重连后仍然发送失败（请检查串口或接收端）")
+                    time.sleep(0.05)
+                    ok2=transceiver.send_positions(positions)
+                    if ok2:
+                        print("重连后发送成功")
                     else:
-                        print("重连失败（请检查串口设备或端口）")
+                        print("重连后仍然发送失败（请检查串口或接收端）")
       
         #更新
         prev_inside = now_inside.copy()
         
         #显示画面
         cv2.imshow('view', canvas)
-        cv2.imshow('mask', mask)
+        #cv2.imshow('mask', mask)
  
-        key = cv2.waitKey(1) & 0xFF #只取键盘码
-        if key==ord('q'):
+        # 改进的按键检测 - 使用更长的等待时间并添加异常处理
+        try:
+            key = cv2.waitKey(30) & 0xFF  # 增加到30ms，减少CPU使用率
+            if key == ord('q'):
+                print("收到退出指令，正在关闭...")
+                break
+            elif key == 27:  # ESC键
+                print("收到ESC退出指令,正在关闭...")
+                break
+        except KeyboardInterrupt:
+            print("收到中断信号，正在关闭...")
             break
+        
 
     capture.release()
     cv2.destroyAllWindows()

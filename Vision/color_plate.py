@@ -1,13 +1,40 @@
 import cv2
 import numpy as np
 from PIL import Image
+import os
+import json
 
 red=[0,0,255]#red in BGR colorspace
 blue=[255,0,0]
 green=[0,255,0]
 
+CONFIG_DIR = os.path.join(os.path.dirname(__file__), 'config')
+REGIONS_PATH = os.path.join(CONFIG_DIR, 'color_plate_region.json')
+
+# 读取区域配置文件
+def load_region_config():
+    #读取区域配置文件，如果文件不存在返回None
+    if os.path.exists(REGIONS_PATH):
+        try:
+            with open(REGIONS_PATH, 'r') as f:
+                config = json.load(f)
+                return config['region']
+        except Exception as e:
+            print(f"读取区域配置文件失败: {e}")
+    return None
+
+# 创建区域掩膜
+def create_region_mask(frame, region_points):
+    if region_points is None or len(region_points) < 3:
+        return None
+    
+    mask = np.zeros(frame.shape[:2], dtype=np.uint8) #全0（黑色）画布
+    points = np.array(region_points, dtype=np.int32)
+    cv2.fillPoly(mask, [points], 255) #画布，区域，填充颜色
+    return mask
+
 #找到color所在的地方 获取mask
-def detect_colors(frame):
+def detect_colors(frame,region_mask=None):
     hsv_frame=cv2.cvtColor(frame,cv2.COLOR_BGR2HSV)#转换为HSV
 
     # 红色在HSV空间上分两段
@@ -35,6 +62,14 @@ def detect_colors(frame):
     red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
     blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel)
     green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_OPEN, kernel)
+
+     # 如果指定了区域掩膜，则只在区域内检测
+    if region_mask is not None:
+        #裁剪颜色掩膜
+        #cv2.bitwise_and(A, B) 按位OR：A和B都为255才保留
+        red_mask = cv2.bitwise_and(red_mask, region_mask)
+        blue_mask = cv2.bitwise_and(blue_mask, region_mask)
+        green_mask = cv2.bitwise_and(green_mask, region_mask)
     
     return red_mask, blue_mask, green_mask  
 
@@ -55,6 +90,10 @@ def find_bboxs(mask):
     return bboxs
 
 def main():
+    # 读取区域配置
+    region_points = load_region_config()
+    use_region = region_points is not None
+
     #使用opencv调用电脑中的摄像头 需要传入摄像头的序号 到设备管理器中看
     capture=cv2.VideoCapture(0)
 
@@ -73,12 +112,25 @@ def main():
         if not ret:
             print("无法读取视频帧")
             break
+
+        if use_region and region_mask is None:
+            region_mask = create_region_mask(frame, region_points)
         
         #检测红蓝色块，现在可以检测多个
-        red_mask, blue_mask, green_mask = detect_colors(frame)
+        red_mask, blue_mask, green_mask = detect_colors(frame,region_mask)
         red_blocks = find_bboxs(red_mask)
         blue_blocks = find_bboxs(blue_mask)
         green_blocks=find_bboxs(green_mask)
+           
+        # 绘制检测区域（如果使用区域检测）
+        if use_region and region_points is not None:
+            # 绘制区域边界
+            points = np.array(region_points, dtype=np.int32)
+            cv2.polylines(frame, [points], True, (255, 255, 255), 2)
+            # 添加区域标签
+            cv2.putText(frame, 'Detection Region', 
+                       (region_points[0][0], region_points[0][1]-10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
            
         #在图像上绘制结果
         #红色block边框显示
