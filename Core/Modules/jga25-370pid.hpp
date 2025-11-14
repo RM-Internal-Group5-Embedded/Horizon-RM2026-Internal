@@ -25,6 +25,7 @@ namespace arpid
         float kp_, ki_, kd_;
         float integral_;
         float last_error_;
+        float last_derivative_;  // 用于D项低通滤波
         float out_min_, out_max_;
         float integral_min_, integral_max_;
     };
@@ -46,7 +47,10 @@ namespace arpid
         
         void setAnglePID(float kp, float ki, float kd);
         void setVelocityPID(float kp, float ki, float kd);
-        
+        void setTargetAngleOffset(float angle);
+        void setAngleFeedforwardGain(float gain) { angle_feedforward_gain_ = gain; }
+        void setVelocityFeedforwardGain(float gain) { velocity_feedforward_gain_ = gain; }
+        float getTargetAngleOffset() const { return target_angle_offset_; }
         float getCurrentAngle() const { return current_angle_; }
         float getCurrentVelocity() const { return current_velocity_; }
         
@@ -62,9 +66,13 @@ namespace arpid
         float target_velocity_;
         float current_angle_;
         float current_velocity_;
+        float target_angle_offset_;
+        float angle_feedforward_gain_;
+        float velocity_feedforward_gain_;
         
         int16_t limitMotorOutput(float output);
     };
+
 }
 
 #endif // JGA25_370PID_HPP

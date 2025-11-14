@@ -54,6 +54,7 @@ jgaencoder::Jga25370Encoder encoder_right(&htim3, 84.0f, 11, 34.0f);
 // ========== 共享传感器 ==========
 // 全局MPU6500实例（陀螺仪+加速度计）
 mpu6500::MPU6500 mpu;
+static volatile bool g_mpuReady = false;
 
 // ========== AR控制器 ==========
 // 左电机AR控制器实例
@@ -61,6 +62,7 @@ arpid::AR ar_left(&motor_left, &encoder_left, &mpu);
 
 // 右电机AR控制器实例
 arpid::AR ar_right(&motor_right, &encoder_right, &mpu);
+
 
 // 任务栈和控制块
 // AR控制任务栈
@@ -90,16 +92,19 @@ void arTask(void *pvPara) {
   ar_right.init();
   
   // 等待陀螺仪校准完成
-  vTaskDelay(pdMS_TO_TICKS(3000));
+  while (!g_mpuReady) {
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
   
   // 自动启动AR控制
   ar_left.enable();
   ar_right.enable();
   ar_left.setTargetVelocity(0.0f);   // 左电机原地平衡
   ar_right.setTargetVelocity(0.0f);  // 右电机原地平衡
-  
+  ar_left.setTargetAngleOffset(6.0f);   // 调整平衡目标角至+6°
+  ar_right.setTargetAngleOffset(6.0f);
   // 控制周期
-  const uint32_t UPDATE_PERIOD_MS = 5;  // 5ms = 200Hz
+  const uint32_t UPDATE_PERIOD_MS = 1;  // 1ms = 1kHz（尽可能快）
   const float dt = UPDATE_PERIOD_MS / 1000.0f;
   
   while (true) {
@@ -119,7 +124,7 @@ void encoderTask(void *pvPara) {
   encoder_right.init();
   
   // 更新周期（毫秒）
-  const uint32_t UPDATE_PERIOD_MS = 20;  // 20ms = 50Hz
+  const uint32_t UPDATE_PERIOD_MS = 5;  // 5ms = 200Hz（与AR控制同步）
   
   while (true) {
     // 更新编码器数据（双电机）
@@ -145,10 +150,14 @@ void mpuTask(void *pvPara) {
   vTaskDelay(pdMS_TO_TICKS(1000));
   
   // 校准陀螺仪零点（AR必须静止！）
-  mpu.calibrateGyro(1000);
+  // mpu.calibrateGyro(1000);
+  // MPU6500通用Mahony参数：Kp=0.8（中等响应），Ki=0.01（轻微积分补偿），积分限幅=0.2
+  mpu.setMahonyGains(0.8f, 0.01f, 0.2f);
+  mpu.resetAttitude();
+  g_mpuReady = true;
   
   // 传感器数据
-  mpu6500::SensorData data;
+  static mpu6500::SensorData data;
   
   // 更新周期
   const uint32_t UPDATE_PERIOD_MS = 5;  // 5ms = 200Hz（平衡车推荐）

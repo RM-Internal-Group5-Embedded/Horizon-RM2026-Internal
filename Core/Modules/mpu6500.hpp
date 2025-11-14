@@ -48,6 +48,12 @@ namespace mpu6500
         
         // 校准陀螺仪零点（平衡车启动时静止状态调用）
         void calibrateGyro(uint16_t samples = 1000);
+
+        // Mahony滤波参数与姿态管理
+        void setMahonyGains(float kp, float ki, float integral_limit = 0.5f);
+        void resetAttitude(float pitch_deg = 0.0f,
+                           float roll_deg = 0.0f,
+                           float yaw_deg = 0.0f);
         
         // 获取当前倾角
         float getPitch() const { return pitch_; }
@@ -71,6 +77,19 @@ namespace mpu6500
         // 转换系数
         float gyro_scale_;
         float accel_scale_;
+        
+        // Mahony滤波器状态
+        float q0_, q1_, q2_, q3_;
+        float ex_int_, ey_int_, ez_int_;
+        float rotation_matrix_[3][3];
+        float kp_;
+        float ki_;
+        float last_dt_;
+        float integral_limit_;
+        
+        void updateRotationMatrix();
+        void clampDt(float& dt);
+        void normalizeQuaternion();
         
         // SPI读写
         uint8_t readRegister(uint8_t reg);

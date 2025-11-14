@@ -108,17 +108,17 @@ namespace arpid
         current_velocity_ = encoder_->getLinearVelocity();
         
         // 速度环（外环）
-        float target_angle = velocity_pid_.compute(target_velocity_, current_velocity_, dt);
+        float target_angle = velocity_pid_.compute(target_velocity_, current_velocity_, dt) + 6;
         
         // 角度环（内环）
         float motor_output = angle_pid_.compute(target_angle, current_angle_, dt);
         
-        // 倾角保护
-        if (current_angle_ > 45.0f || current_angle_ < -45.0f) {
-            motor_->stop();
-            enabled_ = false;
-            return;
-        }
+        // // 倾角保护
+        // if (current_angle_ > 45.0f || current_angle_ < -45.0f) {
+        //     motor_->stop();
+        //     enabled_ = false;
+        //     return;
+        // }
         
         // 控制电机
         int16_t pwm = limitMotorOutput(motor_output);
@@ -159,17 +159,22 @@ namespace arpid
     {
         velocity_pid_.setParams(kp, ki, kd);
     }
+
+    void AR::setTargetAngleOffset(float angle)
+    {
+        target_angle_offset_ = angle;
+    }
     
     int16_t AR::limitMotorOutput(float output)
     {
         const float MIN_PWM = 80.0f;    // 最小启动PWM（测试得出）
         const float MAX_PWM = 1000.0f;  // 最大PWM
-        const float DEAD_ZONE = 70.0f;  // 死区阈值（略小于最小启动PWM）
+        // const float DEAD_ZONE = 70.0f;  // 死区阈值（略小于最小启动PWM）
         
         // 死区处理
-        if (output > -DEAD_ZONE && output < DEAD_ZONE) {
-            return 0;
-        }
+        // if (output > -DEAD_ZONE && output < DEAD_ZONE) {
+        //     return 0;
+        // }
         
         // PWM映射：将PID输出映射到实际可用范围
         // PID输出范围：[-1000, 1000]
@@ -179,10 +184,10 @@ namespace arpid
         if (output > 0) {
             // 正转：映射到 [MIN_PWM, MAX_PWM]
             // 线性映射：DEAD_ZONE -> MIN_PWM, MAX_PWM -> MAX_PWM
-            mapped_pwm = MIN_PWM + (output - DEAD_ZONE) * (MAX_PWM - MIN_PWM) / (MAX_PWM - DEAD_ZONE);
+            mapped_pwm = MIN_PWM + output * (MAX_PWM - MIN_PWM) / MAX_PWM;
         } else if (output < 0) {
             // 反转：映射到 [-MAX_PWM, -MIN_PWM]
-            mapped_pwm = -MIN_PWM + (output + DEAD_ZONE) * (MAX_PWM - MIN_PWM) / (MAX_PWM - DEAD_ZONE);
+            mapped_pwm = -MIN_PWM + output * (MAX_PWM - MIN_PWM) / MAX_PWM;
         }
         
         // 限幅
