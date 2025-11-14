@@ -121,10 +121,15 @@ def main():
         # 或者让用户手动输入
         jc24b_port = input("请手动输入设备路径 (如 /dev/tty.usbserial-XXXX): ").strip()
     
+    transceiver = None
     if jc24b_port:
         print(f"尝试连接JC24B设备: {jc24b_port}")
         transceiver = JC24BTransceiver(port=jc24b_port)
-        transceiver.start_communication()
+        if transceiver.connect():
+            print("JC24B设备连接成功")
+        else:
+            print("JC24B设备连接失败，将运行无通信版本")
+            transceiver = None
     else:
         print("无法确定JC24B设备，将运行无通信版本")
         transceiver = None
