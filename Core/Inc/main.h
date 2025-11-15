@@ -81,7 +81,15 @@ void Error_Handler(void);
 #define LED0_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
-
+/* MPU6500 SPI Pin Definitions */
+#define MPU6500_CS_Pin GPIO_PIN_4
+#define MPU6500_CS_GPIO_Port GPIOA
+#define MPU6500_SCLK_Pin GPIO_PIN_5
+#define MPU6500_SCLK_GPIO_Port GPIOA
+#define MPU6500_MISO_Pin GPIO_PIN_6
+#define MPU6500_MISO_GPIO_Port GPIOA
+#define MPU6500_MOSI_Pin GPIO_PIN_7
+#define MPU6500_MOSI_GPIO_Port GPIOA
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

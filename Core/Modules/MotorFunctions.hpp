@@ -36,7 +36,6 @@ public:
     float RPM_KP = 150.0f;
     float RPM_KI = 0.1f;  
     float RPM_KD = 10.0f;
-    float ANGLE_KP = 150.0f;
     int16_t MAX_CURRENT = 16000;
 
     MotorFunctions(int id,  pFDCAN_RxFifo0CallbackTypeDef       callback, 
@@ -169,7 +168,7 @@ private:
 
     void readMotorFeedback(uint8_t rxData[8]) override;
 
-    int16_t setAnglePID(float target_angle, float dt, bool send);
+    
 };
 
 #endif // MOTORFUNCTIONS_HPP

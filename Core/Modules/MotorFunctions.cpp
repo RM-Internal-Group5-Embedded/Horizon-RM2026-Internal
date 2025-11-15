@@ -419,11 +419,10 @@ GM6020Functions::GM6020Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callback,
     // GM6020 in current mode - uses voltage command format but interprets as current
     // Command range is still ±25000 (voltage range) but represents current
     // PID values for angle control (tuned to prevent overshoot/oscillation)
-    RPM_KP = 12.0f;      // Reduced proportional gain to prevent overshoot
-    RPM_KI = 10.0f;      // Very small integral to prevent windup
-    RPM_KD = 0.01f;       // Reduced derivative for smooth damping
-    ANGLE_KP = 25.0f;
-    MAX_CURRENT = 15000;  // Reduced current limit for smoother control (16384)
+    RPM_KP = 100.0f;      
+    RPM_KI = 0.2f;       
+    RPM_KD = 10.0f;
+    MAX_CURRENT = 20000;
 }
 
 void GM6020Functions::readMotorFeedback(uint8_t rxData[8]) {
@@ -456,32 +455,7 @@ void GM6020Functions::readMotorFeedback(uint8_t rxData[8]) {
     motor_feedback.last_update = current;
 }
 
-int16_t GM6020Functions::setAnglePID(float target_angle, float dt, bool send){
-    
-    // Cascaded PID: Angle → RPM → Current
-    // Step 1: Calculate angle error and convert to target RPM
-    float angle_error = target_angle - motor_feedback.top_shaft_angle;
-    
-    // Add deadband to prevent micro-oscillations near target
-    if (fabsf(angle_error) < 5.0f) {  // 2° deadband
-        angle_error = 0.0f;
-    }
-    
-    float target_rpm = angle_error * ANGLE_KP;  // Proportional conversion to RPM
-    
-    // Step 2: Limit target RPM to maxRpm
-    if (target_rpm > maxRpm) {
-        target_rpm = maxRpm;
-    } else if (target_rpm < -maxRpm) {
-        target_rpm = -maxRpm;
-    }
-    
-    // Step 3: Use RPM PID to convert target RPM to current
-    // This uses RPM_KP, RPM_KI, RPM_KD for velocity control
-    int16_t output = setRpmPID((int16_t)target_rpm, dt, send);
-    
-    return output;
-}
+
 
 
 

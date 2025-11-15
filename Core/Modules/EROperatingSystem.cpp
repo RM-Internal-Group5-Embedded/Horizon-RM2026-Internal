@@ -27,18 +27,37 @@ ERStatusControl::ERStatusControl(M3508Functions& motor_front_left, M3508Function
 const float CENTER = 1024.0f;
 const float SBUS_SPAN = 783.0f;
 
+static float computeDeltaTime(uint32_t& last_time_ms) {
+    uint32_t current_time = HAL_GetTick();
+
+    if (last_time_ms == 0 || (current_time - last_time_ms) > 1000) {
+        last_time_ms = current_time;
+    }
+
+    float dt = (current_time - last_time_ms) / 1000.0f;
+    if (dt <= 0.0f || dt > 0.1f) {
+        dt = 0.01f;
+    }
+    last_time_ms = current_time;
+    return dt;
+}
+
 //Plan: use FSM to enable multiple states: |, & 0x0008 
 
 void ERStatusControl::switchState(const uartdriver::ReceivedValue& received_data) {
+    gold_Over = true;
     if(received_data.channel_10 <=1024) {
         current_state = IDLE;
     } else {
         current_state = GOLD;
-        if(received_data.channel_7 > 1500) {
-        current_state = MANUAL;
-        }
-        if(received_data.channel_8 > 1500) {
-        current_state = MINING;
+        if(gold_Over){
+            if(received_data.channel_9 < 500) {
+            current_state = FAST;
+            } else if(received_data.channel_9 == 1024){
+            current_state = MANUAL;
+            } else if(received_data.channel_9 > 1500) {
+            current_state = MINING;
+            }
         }
     }
 }
@@ -59,9 +78,12 @@ void ERStatusControl::idleMode() {
     manual_control.motor_back_right->resetData();
 }
 
-void ERStatusControl::manualMode(const uartdriver::ReceivedValue& received_data) {
+void ERStatusControl::fastMode(const uartdriver::ReceivedValue& received_data) {
     traversal(received_data.channel_1, received_data.channel_2, received_data.channel_4, 1000, 500);
-    
+}
+
+void ERStatusControl::manualMode(const uartdriver::ReceivedValue& received_data) {
+    traversal(received_data.channel_1, received_data.channel_2, received_data.channel_4, 600, 500);
 }
 
 void ERStatusControl::miningMode(const uartdriver::ReceivedValue& received_data) {
@@ -102,16 +124,7 @@ void ERStatusControl::traversal( uint16_t joystick_r_x, uint16_t joystick_r_y,
 
     // Calculate timing
     static uint32_t last_time = 0;
-    uint32_t current_time = HAL_GetTick();
-    
-    // Reset timing on first call or after long gap
-    if (last_time == 0 || (current_time - last_time) > 1000) {
-        last_time = current_time;
-    }
-    
-    float dt = (current_time - last_time) / 1000.0f;
-    if (dt <= 0 || dt > 0.1f) dt = 0.01f;
-    last_time = current_time;
+    float dt = computeDeltaTime(last_time);
     
     // Use motor class PID methods (send = false, just calculate)
     int16_t curr_lf = manual_control.motor_front_left->setRpmPID(front_left_rpm, dt, false);
@@ -129,20 +142,20 @@ void ERStatusControl::update(const uartdriver::ReceivedValue& received_data) {
         case IDLE:
             idleMode();
             break;
-        case MANUAL:
-            manualMode(received_data);
-            break;
         case GOLD:
             goldMode();
+            break;
+        case FAST:
+            fastMode(received_data);
+            break;
+        case MANUAL:
+            manualMode(received_data);
             break;
         case MINING:
             miningMode(received_data);
             break;
         case DEPOSIT:
             // depositMode();
-            break;
-        case ER_ERROR:
-            idleMode();
             break;
     }
 }
@@ -268,100 +281,116 @@ void ERClawControl::idleMode() {
         claw_motors.base_claw->sendMITCommand(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
     }
     // Send zero to both GM6020 and M3508 claw motors
-    sendClawCurrents(0, 0);
+    if (claw_motors.small_claw) {
+        claw_motors.small_claw->sendCurrent(0);
+    }
+    
+    if (claw_motors.m3508_claw) {
+        claw_motors.m3508_claw->sendCurrent(0);
+    }
 }
 
 void ERClawControl::claspMode(const uartdriver::ReceivedValue& received_data) {
     static uint32_t last_time = 0;
-    uint32_t current_time = HAL_GetTick();
-    
-    // Reset timing on first call or after long gap
-    if (last_time == 0 || (current_time - last_time) > 1000) {
-        last_time = current_time;
-    }
-    
-    float dt = (current_time - last_time) / 1000.0f;
-    if (dt <= 0 || dt > 0.1f) dt = 0.01f;
-    last_time = current_time;
+    float dt = computeDeltaTime(last_time);
     
     int16_t gm6020_current = 0;
     int16_t m3508_current = 0;
 
-    float gm6020degree = 45*(static_cast<float>(received_data.channel_6) - CENTER) / SBUS_SPAN;
-    
-    // DMJ4310 base claw control - CLASP MODE: go to 720° (top shaft angle)
-    // 1:1 ratio - 720° = 4π radians ≈ 12.566 radians
-    if (claw_motors.base_claw) {
-        // 720° = 4π radians (within ±12.5 rad range)
-        float motor_position = 4*3.14159265f;  // ~12.566 radians = 720°
-        // MIT command: position=12.566 rad, velocity=0, kp=50, kd=2, torque=0
-        claw_motors.base_claw->sendMITCommand(motor_position, 0.0001f, 
-                                claw_motors.base_claw->RPM_KP, 
-                                claw_motors.base_claw->RPM_KD, 
-                                claw_motors.base_claw->RPM_KI);
-    }
+    float gm6020degree = 180*(static_cast<float>(received_data.channel_6) - CENTER) / SBUS_SPAN;
     
     if (claw_motors.small_claw) {
         // Use PID to reach 720 degrees (2 full rotations)
-        gm6020_current = claw_motors.small_claw->setAnglePID(112.5f + gm6020degree, dt, false);
+        gm6020_current = claw_motors.small_claw->setAnglePID(gm6020degree, dt, true);
     }
-    
-    if (claw_motors.m3508_claw) {
-        m3508_current = claw_motors.m3508_claw->setAnglePID(720.0f, dt, false);
-    }
-    
-    // Send both motors in one call
-    sendClawCurrents(gm6020_current, m3508_current);
 }
 
 void ERClawControl::releaseMode(const uartdriver::ReceivedValue& received_data) {
     static uint32_t last_time = 0;
-    uint32_t current_time = HAL_GetTick();
-    
-    // Reset timing on first call or after long gap
-    if (last_time == 0 || (current_time - last_time) > 1000) {
-        last_time = current_time;
-    }
-    
-    float dt = (current_time - last_time) / 1000.0f;
-    if (dt <= 0 || dt > 0.1f) dt = 0.01f;
-    last_time = current_time;
-    
-    // DMJ4310 base claw control - RELEASE MODE: go to 0° (top shaft angle)
-    if (claw_motors.base_claw) {
-        // 0° top shaft = 0° motor = 0 radians
-        float motor_position = 0.0f;  // Return to zero
-        // MIT command: position=12.566 rad, velocity=0, kp=50, kd=2, torque=0
-        claw_motors.base_claw->sendMITCommand(motor_position, 0.01f, 
-                                claw_motors.base_claw->RPM_KP, 
-                                claw_motors.base_claw->RPM_KD, 
-                                claw_motors.base_claw->RPM_KI);
-    }
+    float dt = computeDeltaTime(last_time);
     
     // Calculate PID for both claw motors
     int16_t gm6020_current = 0;
     int16_t m3508_current = 0;
     
     if (claw_motors.small_claw) {
-        gm6020_current = claw_motors.small_claw->setAnglePID(0.0f, dt, false);
+        gm6020_current = claw_motors.small_claw->setAnglePID(0.0f, dt, true);
     }
     
     if (claw_motors.m3508_claw) {
-        m3508_current = claw_motors.m3508_claw->setAnglePID(0.0f, dt, false);
+        m3508_current = claw_motors.m3508_claw->setAnglePID(0.0f, dt, true);
     }
+}
+
+void ERClawControl::upMode(const uartdriver::ReceivedValue& received_data) {
+
+    static uint32_t last_time = 0;
+    float dt = computeDeltaTime(last_time);
     
-    // Send both motors in one call
-    sendClawCurrents(gm6020_current, m3508_current);
+    float m3508_angle = 0;
+    m3508_angle = 720*(static_cast<float>(received_data.channel_3) - CENTER) / SBUS_SPAN;
+    
+
+    // DMJ4310 base claw control - RELEASE MODE: go to 0° (top shaft angle)
+    if (claw_motors.base_claw) {
+        // 0° top shaft = 0° motor = 0 radians
+        float motor_position = 0.0f;  // Return to zero
+        motor_position = 180*(static_cast<float>(received_data.channel_5) - CENTER) / SBUS_SPAN;
+    
+
+        // MIT command: position=12.566 rad, velocity=0, kp=50, kd=2, torque=0
+        claw_motors.base_claw->sendMITCommand(motor_position, 0.01f, 
+                                claw_motors.base_claw->RPM_KP, 
+                                claw_motors.base_claw->RPM_KD, 
+                                claw_motors.base_claw->RPM_KI);
+    }
+
+    if (claw_motors.m3508_claw) {
+        m3508_angle = claw_motors.m3508_claw->setAnglePID(m3508_angle, dt, true);
+    }
+}
+
+void ERClawControl::downMode(const uartdriver::ReceivedValue& received_data) {
+    static uint32_t last_time = 0;
+    float dt = computeDeltaTime(last_time);
+     
+    float m3508_angle = 0;
+    
+    // DMJ4310 base claw control - RELEASE MODE: go to 0° (top shaft angle)
+    if (claw_motors.base_claw) {
+        // 0° top shaft = 0° motor = 0 radians
+        float motor_position = 0.0f;  // Return to zero
+        //motor_position = 180*(static_cast<float>(received_data.channel_5) - CENTER) / SBUS_SPAN;
+    
+        // MIT command: position=12.566 rad, velocity=0, kp=50, kd=2, torque=0
+        claw_motors.base_claw->sendMITCommand(motor_position, 0.01f, 
+                                claw_motors.base_claw->RPM_KP, 
+                                claw_motors.base_claw->RPM_KD, 
+                                claw_motors.base_claw->RPM_KI);
+    }
+
+    if (claw_motors.m3508_claw) {
+        m3508_angle = claw_motors.m3508_claw->setAnglePID(0, dt, true);
+    }
 }
 
 void ERClawControl::switchState(const uartdriver::ReceivedValue& received_data) {
-    if (received_data.channel_9 < 500) {
+    if(received_data.channel_10 <=1024) {
         current_state = ClawState::IDLE;
-    } else if (received_data.channel_9 == 1024) {
-        current_state = ClawState::RELEASE;
     } else {
-        current_state = ClawState::CLASP;
+        if (received_data.channel_7 < 500) {
+            current_state = ClawState::RELEASE;
+        } else {
+            current_state = ClawState::CLASP;
+        }
+
+        if (received_data.channel_8 < 500) {
+            arm_state = ArmState::UP;
+        } else {
+            arm_state = ArmState::DOWN;
+        }
     }
+    
 }
 
 void ERClawControl::update(const uartdriver::ReceivedValue& received_data) {
@@ -380,16 +409,25 @@ void ERClawControl::update(const uartdriver::ReceivedValue& received_data) {
             idleMode();
             break;
     }
+    if(current_state!= ClawState::IDLE)
+    switch (arm_state) {
+        case ArmState::UP:
+            upMode(received_data);
+            break;
+        case ArmState::DOWN:
+            downMode(received_data);
+            break;
+    }
 }
 
-void ERClawControl::sendClawCurrents(int16_t gm6020_current, int16_t m3508_current) {
+// void ERClawControl::sendClawCurrents(int16_t gm6020_current, int16_t m3508_current) {
     
-    // Use motor's own sendCurrent method (handles all the packing internally)
-    if (claw_motors.small_claw) {
-        claw_motors.small_claw->sendCurrent(gm6020_current);
-    }
+//     // Use motor's own sendCurrent method (handles all the packing internally)
+//     if (claw_motors.small_claw) {
+//         claw_motors.small_claw->sendCurrent(gm6020_current);
+//     }
     
-    if (claw_motors.m3508_claw) {
-        claw_motors.m3508_claw->sendCurrent(m3508_current);
-    }
-}
+//     if (claw_motors.m3508_claw) {
+//         claw_motors.m3508_claw->sendCurrent(m3508_current);
+//     }
+// }

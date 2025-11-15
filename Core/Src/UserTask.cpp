@@ -17,6 +17,7 @@
 #include "MotorFunctions.hpp"
 #include "ws2812.hpp"
 
+
 extern "C" {
 #include "fdcan.h"
 }
@@ -320,7 +321,7 @@ void startUserTasks() {
   // Create claw update task (lower priority, runs at 50Hz)
   xTaskCreateStatic(updateClawTask, "Claw_Task", configMINIMAL_STACK_SIZE * 8, NULL, 5,
                     uxClawTaskStack, &xClawTaskTCB);
-  
+
   /**
    * @todo Add your own task here
    */
