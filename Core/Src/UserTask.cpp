@@ -18,7 +18,7 @@
 #include "mpu6500.hpp"  // 包含MPU6500陀螺仪驱动头文件
 #include "tim.h"  // 包含定时器头文件
 #include "spi.h"  // 包含SPI头文件
-
+#include "mg945.hpp"
 // ========== 手动PWM控制（已禁用，如需测试可取消注释） ==========
 // uint16_t g_manual_pwm = 0;          // PWM值 (0-1000)
 // uint8_t g_direction = 0;            // 方向 (0=停止, 1=正转, 2=反转)
@@ -62,7 +62,8 @@ arpid::AR ar_left(&motor_left, &encoder_left, &mpu);
 
 // 右电机AR控制器实例
 arpid::AR ar_right(&motor_right, &encoder_right, &mpu);
-
+// ========== mg控制器 ==========
+mg::mg945 servo(&htim2, TIM_CHANNEL_1, 0, 45, 90);
 
 // 任务栈和控制块
 // AR控制任务栈
@@ -77,6 +78,8 @@ StaticTask_t xEncoderTaskTCB;
 StackType_t uxMpuTaskStack[configMINIMAL_STACK_SIZE * 4];  // 512字节栈
 StaticTask_t xMpuTaskTCB;
 
+StackType_t  uxMgTaskStack[configMINIMAL_STACK_SIZE * 3]; // 384字节栈
+StaticTask_t xMgTaskTCB;
 // PWM控制任务栈
 // StackType_t uxPWMTaskStack[configMINIMAL_STACK_SIZE * 2];  // 256字节栈
 // StaticTask_t xPWMTaskTCB;
@@ -101,8 +104,8 @@ void arTask(void *pvPara) {
   ar_right.enable();
   ar_left.setTargetVelocity(0.0f);   // 左电机原地平衡
   ar_right.setTargetVelocity(0.0f);  // 右电机原地平衡
-  ar_left.setTargetAngleOffset(6.0f);   // 调整平衡目标角至+6°
-  ar_right.setTargetAngleOffset(6.0f);
+  // ar_left.setTargetAngleOffset(5.0f); 
+  // ar_right.setTargetAngleOffset(5.0f);
   // 控制周期
   const uint32_t UPDATE_PERIOD_MS = 1;  // 1ms = 1kHz（尽可能快）
   const float dt = UPDATE_PERIOD_MS / 1000.0f;
@@ -124,7 +127,7 @@ void encoderTask(void *pvPara) {
   encoder_right.init();
   
   // 更新周期（毫秒）
-  const uint32_t UPDATE_PERIOD_MS = 5;  // 5ms = 200Hz（与AR控制同步）
+  const uint32_t UPDATE_PERIOD_MS = 1;  
   
   while (true) {
     // 更新编码器数据（双电机）
@@ -149,9 +152,9 @@ void mpuTask(void *pvPara) {
   // 等待1秒让传感器稳定
   vTaskDelay(pdMS_TO_TICKS(1000));
   
-  // 校准陀螺仪零点（AR必须静止！）
-  // mpu.calibrateGyro(1000);
-  // MPU6500通用Mahony参数：Kp=0.8（中等响应），Ki=0.01（轻微积分补偿），积分限幅=0.2
+  //校准陀螺仪零点（AR必须静止！）
+  mpu.calibrateGyro(1000);
+  //MPU6500通用Mahony参数：Kp=0.8（中等响应），Ki=0.01（轻微积分补偿），积分限幅=0.2
   mpu.setMahonyGains(0.8f, 0.01f, 0.2f);
   mpu.resetAttitude();
   g_mpuReady = true;
@@ -160,7 +163,7 @@ void mpuTask(void *pvPara) {
   static mpu6500::SensorData data;
   
   // 更新周期
-  const uint32_t UPDATE_PERIOD_MS = 5;  // 5ms = 200Hz（平衡车推荐）
+  const uint32_t UPDATE_PERIOD_MS = 1;  
   const float dt = UPDATE_PERIOD_MS / 1000.0f;
   
   while (true) {
@@ -170,7 +173,22 @@ void mpuTask(void *pvPara) {
     vTaskDelay(pdMS_TO_TICKS(UPDATE_PERIOD_MS));
   }
 }
+void mgTask(void *pvPara){
+  servo.init();
 
+  const uint32_t ROTATE_TIME_MS = 500;  
+
+  while(1){
+    servo.first_angle();
+    vTaskDelay(pdMS_TO_TICKS(ROTATE_TIME_MS));
+    servo.second_angle();
+    vTaskDelay(pdMS_TO_TICKS(ROTATE_TIME_MS));
+    servo.third_angle();
+    vTaskDelay(pdMS_TO_TICKS(ROTATE_TIME_MS));
+  }
+
+
+}
 // 手动PWM控制任务函数（已禁用，如需测试可取消注释）
 // void pwmTask(void *pvPara) {
 //   // 初始化电机
@@ -223,7 +241,9 @@ void startUserTasks() {
   xTaskCreateStatic(encoderTask, "Encoder_Task", configMINIMAL_STACK_SIZE * 3, NULL, 8,
                     uxEncoderTaskStack, &xEncoderTaskTCB);
   
-  // 如果需要手动PWM控制（用于测试），取消注释下面的任务
+  xTaskCreateStatic(mgTask, "MG_Task", configMINIMAL_STACK_SIZE * 3, NULL, 11,
+                    uxMgTaskStack, &xMgTaskTCB);
+                    // 如果需要手动PWM控制（用于测试），取消注释下面的任务
   // xTaskCreateStatic(pwmTask, "PWM_Task", configMINIMAL_STACK_SIZE * 2, NULL, 3,
   //                   uxPWMTaskStack, &xPWMTaskTCB);
   

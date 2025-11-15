@@ -104,11 +104,11 @@ namespace arpid
         }
         
         // 读取传感器
-        current_angle_ = mpu_->getPitch();
+        current_angle_ = -mpu_->getPitch();
         current_velocity_ = encoder_->getLinearVelocity();
         
         // 速度环（外环）
-        float target_angle = velocity_pid_.compute(target_velocity_, current_velocity_, dt) + 6;
+        float target_angle = velocity_pid_.compute(target_velocity_, current_velocity_, dt);
         
         // 角度环（内环）
         float motor_output = angle_pid_.compute(target_angle, current_angle_, dt);
@@ -160,10 +160,10 @@ namespace arpid
         velocity_pid_.setParams(kp, ki, kd);
     }
 
-    void AR::setTargetAngleOffset(float angle)
-    {
-        target_angle_offset_ = angle;
-    }
+    // void AR::setTargetAngleOffset(float angle)
+    // {
+    //     target_angle_offset_ = angle;
+    // }
     
     int16_t AR::limitMotorOutput(float output)
     {
