@@ -238,7 +238,7 @@ class JC24BTransceiver:
                         if ack_miss_count >= 5:  # 连续5次没收到ACK
                             print("警告：连续未收到确认包")
                 
-                # 严格保持100ms间隔
+                # 严格保持100ms间隔（原始架构要求持续推送最新状态，避免STM32端3帧去抖逻辑在仅单次触发时无法写入位置）
                 time.sleep(0.1)
                 
             except KeyboardInterrupt:

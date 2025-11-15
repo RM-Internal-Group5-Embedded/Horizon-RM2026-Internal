@@ -37,7 +37,7 @@ private:
     UART_HandleTypeDef* huart_;      // 串口句柄
     uint8_t rx_buffer_[16];          // DMA接收缓冲区
 
-    bool stable_positions_[4];       // 去抖后的稳定位置状态
+    bool positions_[4];       // 位置状态
     uint8_t debounce_counters_[4];   // 去抖计数器
     
     // 连接状态

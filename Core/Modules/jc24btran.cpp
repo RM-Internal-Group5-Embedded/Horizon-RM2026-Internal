@@ -66,7 +66,7 @@ bool DataTransceiver::validateData(const user_data& data) {
 }
 
 void DataTransceiver::resetDebouncedState() {
-    memset(stable_positions_, 0, sizeof(stable_positions_));
+    memset(positions_, 0, sizeof(positions_));
     memset(debounce_counters_, 0, sizeof(debounce_counters_));
 }
 
@@ -80,13 +80,15 @@ void DataTransceiver::updateDebouncedPositions(const user_data& data) {
 
     if (DEBOUNCE_FRAMES <= 1) {
         for (uint8_t i = 0; i < 4; ++i) {
-            stable_positions_[i] = (raw_positions[i] != 0);
+            positions_[i] = (raw_positions[i] != 0);
             debounce_counters_[i] = raw_positions[i] != 0 ? 1 : 0;
         }
         return;
     }
 
     for (uint8_t i = 0; i < 4; ++i) {
+        // 需要连续 DEBOUNCE_FRAMES 次同样的非零输入才会置位，
+        // 因此 PC 端必须持续周期性发送最新状态，而非仅在事件发生时单发一帧
         if (raw_positions[i] != 0) {
             if (debounce_counters_[i] < DEBOUNCE_FRAMES) {
                 debounce_counters_[i]++;
@@ -97,7 +99,7 @@ void DataTransceiver::updateDebouncedPositions(const user_data& data) {
             }
         }
 
-        stable_positions_[i] = (debounce_counters_[i] >= DEBOUNCE_FRAMES);
+        positions_[i] = (debounce_counters_[i] >= DEBOUNCE_FRAMES);
     }
 }
 
@@ -225,10 +227,10 @@ bool DataTransceiver::getPositions(bool positions[4]) {
     }
     
     // 复制去抖后的稳定位置数据
-    positions[0] = stable_positions_[0];
-    positions[1] = stable_positions_[1];
-    positions[2] = stable_positions_[2];
-    positions[3] = stable_positions_[3];
+    positions[0] = positions_[0];
+    positions[1] = positions_[1];
+    positions[2] = positions_[2];
+    positions[3] = positions_[3];
     
     return true;
 }
