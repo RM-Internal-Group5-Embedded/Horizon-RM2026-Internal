@@ -126,8 +126,8 @@ public:
     
     
     ClawMotors claw_motors;
-    ClawState current_state;
-    ArmState arm_state;
+        ClawState current_state = ClawState::IDLE;
+        ArmState arm_state = ArmState::IDLE;
     
     ERClawControl(DMJ4310Functions& base_motor, GM6020Functions& small_motor);
     

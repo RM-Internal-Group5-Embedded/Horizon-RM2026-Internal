@@ -16,6 +16,8 @@
 #include "EROperatingSystem.hpp"
 #include "MotorFunctions.hpp"
 #include "ws2812.hpp"
+#include "spi.h"
+#include "mpu6500.hpp"
 
 
 extern "C" {
@@ -36,6 +38,9 @@ StaticTask_t xERTaskTCB;
 // Claw任务栈和控制块
 StackType_t uxClawTaskStack[configMINIMAL_STACK_SIZE * 8];
 StaticTask_t xClawTaskTCB;
+// MPU任务栈和控制块
+StackType_t uxMpuTaskStack[configMINIMAL_STACK_SIZE * 4];
+StaticTask_t xMpuTaskTCB;
 // UART任务函数 - 负责UART初始化和心跳检查
 void uartTask(void *pvPara) {
   // 初始化UART
@@ -63,7 +68,7 @@ M3508Functions * motor_r_b_p = nullptr;
 // Claw Motors (static storage)
 GM6020Functions   * gm6020_motor_p  = nullptr;  // Small claw (ID 7)
 M3508Functions    * s_m3508_claw_p  = nullptr;  // Medium (ID 5)
-DMJ4310Functions  * dmj4310_motor_p = nullptr;  // Base claw (ID 5)
+DMJ4310Functions  * dmj4310_motor_p = nullptr;  // Base claw (ID 1)
 
 extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs) {
   if ((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) == 0) return;
@@ -209,12 +214,12 @@ void updateClawTask(void *pvPara) {
     
     motors_initialized = true;
   }
-  
+  volatile static bool claw_timeout = false;
   while (true) {
     uint32_t current_time = HAL_GetTick();
     
     // Check for claw motor timeouts (no feedback for >100ms = disconnected)
-    volatile static bool claw_timeout = false;
+    claw_timeout = false;
     if (gm6020_motor_p && (current_time - gm6020_motor_p->motor_feedback.last_update > 100)) 
       claw_timeout = true;
     
@@ -227,6 +232,7 @@ void updateClawTask(void *pvPara) {
     if (claw_timeout) {
       if (gm6020_motor_p) gm6020_motor_p->sendCurrent(0);
       if (s_m3508_claw_p) s_m3508_claw_p->sendCurrent(0);
+      if (dmj4310_motor_p) dmj4310_motor_p->sendMITCommand(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
       // DMJ4310 already gets zero command above
     } else {
       // Normal operation: Update claw state and motors
@@ -234,7 +240,45 @@ void updateClawTask(void *pvPara) {
       er_claw_control_p->update(g_uart.getReceivedValue());
     }
     
-    vTaskDelay(pdMS_TO_TICKS(5));  // 100Hz for smooth DMJ4310 feedback
+    vTaskDelay(pdMS_TO_TICKS(2));  
+  }
+}
+
+mpu6500::MPU6500 mpu;
+bool g_mpuReady = false;
+
+  // MPU6500陀螺仪任务函数
+void mpuTask(void *pvPara) {
+  // 初始化MPU6500
+  if (!mpu.init()) {
+    // 初始化失败
+    while(1) {
+      vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+  }
+  
+  // 等待1秒让传感器稳定
+  vTaskDelay(pdMS_TO_TICKS(1000));
+  
+  //校准陀螺仪零点（AR必须静止！）
+  mpu.calibrateGyro(1000);
+  //MPU6500通用Mahony参数：Kp=0.8（中等响应），Ki=0.01（轻微积分补偿），积分限幅=0.2
+  mpu.setMahonyGains(0.8f, 0.01f, 0.2f);
+  mpu.resetAttitude();
+  g_mpuReady = true;
+  
+  // 传感器数据
+  static mpu6500::SensorData data;
+  
+  // 更新周期
+  const uint32_t UPDATE_PERIOD_MS = 1;  
+  const float dt = UPDATE_PERIOD_MS / 1000.0f;
+  
+  while (true) {
+    // 更新传感器数据和倾角
+    mpu.update(data, dt);
+    
+    vTaskDelay(pdMS_TO_TICKS(UPDATE_PERIOD_MS));
   }
 }
 
@@ -286,17 +330,21 @@ void startUserTasks() {
   extern FDCAN_HandleTypeDef hfdcan1;
   FDCAN_FilterTypeDef filter = Modules::DJIMotors::getFilter(0x7FF, 0x000);  // Accept all standard IDs
   
-  // Configure filter
   if (HAL_FDCAN_ConfigFilter(&hfdcan1, &filter) != HAL_OK) {
       Error_Handler();
   }
+  FDCAN_FilterTypeDef dmj_filter = Modules::DJIMotors::getFilter(0x300, 0x300);
+  dmj_filter.FilterIndex = 1;
+  if (HAL_FDCAN_ConfigFilter(&hfdcan1, &dmj_filter) != HAL_OK) {
+      Error_Handler();
+  }
   
-  // Configure global filter to ACCEPT ALL (not reject like DJIMotors::init does)
+  // Accept all other frames into FIFO0
   HAL_FDCAN_ConfigGlobalFilter(&hfdcan1, 
-                              FDCAN_ACCEPT_IN_RX_FIFO0,  // Accept all to RX FIFO0
-                              FDCAN_ACCEPT_IN_RX_FIFO0,  // Accept all non-matching too
-                              FDCAN_FILTER_REMOTE, 
-                              FDCAN_FILTER_REMOTE);
+                              FDCAN_ACCEPT_IN_RX_FIFO0,
+                              FDCAN_ACCEPT_IN_RX_FIFO0,
+                              FDCAN_REJECT, 
+                              FDCAN_REJECT);
   
   // Activate notification
   HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
@@ -315,13 +363,16 @@ void startUserTasks() {
                     uxUartTaskStack, &xUartTaskTCB);
   
   // Create ER chassis update task (medium priority)
-  xTaskCreateStatic(updateERTask, "Chassis_Task", configMINIMAL_STACK_SIZE * 6, NULL, 4,
+  xTaskCreateStatic(updateERTask, "Chassis_Task", configMINIMAL_STACK_SIZE * 6, NULL, 8,
                     uxERTaskStack, &xERTaskTCB);
   
   // Create claw update task (lower priority, runs at 50Hz)
-  xTaskCreateStatic(updateClawTask, "Claw_Task", configMINIMAL_STACK_SIZE * 8, NULL, 5,
+  xTaskCreateStatic(updateClawTask, "Claw_Task", configMINIMAL_STACK_SIZE * 8, NULL, 7,
                     uxClawTaskStack, &xClawTaskTCB);
-
+  
+  //mpu6500
+  xTaskCreateStatic(mpuTask, "MPU_Task", configMINIMAL_STACK_SIZE * 3, NULL, 2,
+                  uxMpuTaskStack, &xMpuTaskTCB);
   /**
    * @todo Add your own task here
    */

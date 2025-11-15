@@ -276,9 +276,19 @@ ERClawControl::ERClawControl(DMJ4310Functions& base_motor, GM6020Functions& smal
 
 void ERClawControl::idleMode() {
     // Stop all claw motors
+    // Always keep DMJ4301 alive by issuing a zero command
     if (claw_motors.base_claw) {
-        // For DMJ4310, send zero torque MIT command (no position hold)
-        claw_motors.base_claw->sendMITCommand(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+        claw_motors.base_claw->sendMITCommand(0.0f,
+                                              0.0f,
+                                              claw_motors.base_claw->RPM_KP,
+                                              claw_motors.base_claw->RPM_KD,
+                                              0.0f);
+        // Optionally clear latched errors on startup
+        if (claw_motors.base_claw->hasError()) {
+            claw_motors.base_claw->disableMotor();
+            HAL_Delay(5);
+            claw_motors.base_claw->enableMotor();
+        }
     }
     // Send zero to both GM6020 and M3508 claw motors
     if (claw_motors.small_claw) {

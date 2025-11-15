@@ -227,15 +227,14 @@ DMJ4310Functions::DMJ4310Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callbac
                                    pFDCAN_ErrorStatusCallbackTypeDef errorCallback,
                                    uint16_t filterID2, uint16_t filterID1)
                                    : MotorFunctions(id, callback, errorCallback) {
-    // DMJ4310 MIT Mode: TX = motor's CAN_ID, RX = Master ID (default 0)
-    // The motor's CAN_ID must be set via debug assistant
-    filter = Modules::DJIMotors::getFilter(filterID2, filterID1);
+    // DMJ4310 MIT mode: TX = motor CAN_ID, RX = master ID (0x300 default)
+    filter = Modules::DJIMotors::getFilter(0x300, 0x300);
     txHeader = Modules::DJIMotors::getTxHeader(id, Modules::DJIMotors::MotorType::DMJ4310);
     
     // DMJ4310-specific PID tuning
-    RPM_KP = 25.0f;    // Moderate P gain
+    RPM_KP = 1.0f;    // Moderate P gain
     RPM_KI = 0.05f;    // Low integral to prevent windup
-    RPM_KD = 0.4f;     // Moderate derivative
+    RPM_KD = 0.1f;     // Moderate derivative
     MAX_CURRENT = 10000;  // Conservative current limit
 }
 
@@ -420,8 +419,8 @@ GM6020Functions::GM6020Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callback,
     // Command range is still ±25000 (voltage range) but represents current
     // PID values for angle control (tuned to prevent overshoot/oscillation)
     RPM_KP = 100.0f;      
-    RPM_KI = 0.2f;       
-    RPM_KD = 10.0f;
+    RPM_KI = 0.1f;       
+    RPM_KD = 1.5f;
     MAX_CURRENT = 20000;
 }
 
