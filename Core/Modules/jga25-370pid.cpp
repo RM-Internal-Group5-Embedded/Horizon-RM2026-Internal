@@ -46,12 +46,13 @@ namespace arpid
         if (integral_ > integral_max_) integral_ = integral_max_;
         if (integral_ < integral_min_) integral_ = integral_min_;
         float i_term = ki_ * integral_;
-        
-        // D项
         float derivative = (error - last_error_) / dt;
+        const float alpha = 0.01f;
+        derivative = alpha * derivative + (1.0f - alpha) * last_derivative_;
         float d_term = kd_ * derivative;
         
         last_error_ = error;
+        last_derivative_ = derivative;
         
         // 总输出
         float output = p_term + i_term + d_term;
@@ -77,7 +78,7 @@ namespace arpid
         : motor_(motor)
         , encoder_(encoder)
         , mpu_(mpu)
-        , angle_pid_(0.0f, 0.0f, 0.0f)      // 角度环
+        , angle_pid_(0.0f, 0.0f, 0.0f)      
         , velocity_pid_(0.0f, 0.0f, 0.0f)     // 速度环
         , enabled_(false)
         , target_velocity_(0.0f)
@@ -108,10 +109,10 @@ namespace arpid
         current_velocity_ = encoder_->getLinearVelocity();
         
         // 速度环（外环）
-        float target_angle = velocity_pid_.compute(target_velocity_, current_velocity_, dt);
+        float target_angle = velocity_pid_.compute(target_velocity_, current_velocity_, dt) + target_angle_offset_;
         
         // 角度环（内环）
-        float motor_output = angle_pid_.compute(target_angle, current_angle_, dt);
+        float motor_output = angle_pid_.compute(target_angle + target_angle_offset_, current_angle_, dt);
         
         // // 倾角保护
         // if (current_angle_ > 45.0f || current_angle_ < -45.0f) {
@@ -160,10 +161,10 @@ namespace arpid
         velocity_pid_.setParams(kp, ki, kd);
     }
 
-    // void AR::setTargetAngleOffset(float angle)
-    // {
-    //     target_angle_offset_ = angle;
-    // }
+    void AR::setTargetAngleOffset(float angle)
+    {
+        target_angle_offset_ = angle;
+    }
     
     int16_t AR::limitMotorOutput(float output)
     {

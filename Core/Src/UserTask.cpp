@@ -98,14 +98,16 @@ void arTask(void *pvPara) {
   while (!g_mpuReady) {
     vTaskDelay(pdMS_TO_TICKS(10));
   }
-  
+
   // 自动启动AR控制
+  ar_left.setAnglePID(190, 30, 8);
+  ar_right.setAnglePID(80, 30, 8);
   ar_left.enable();
   ar_right.enable();
+  ar_left.setTargetAngleOffset(2.5f);
+  ar_right.setTargetAngleOffset(2.5f);
   ar_left.setTargetVelocity(0.0f);   // 左电机原地平衡
   ar_right.setTargetVelocity(0.0f);  // 右电机原地平衡
-  // ar_left.setTargetAngleOffset(5.0f); 
-  // ar_right.setTargetAngleOffset(5.0f);
   // 控制周期
   const uint32_t UPDATE_PERIOD_MS = 1;  // 1ms = 1kHz（尽可能快）
   const float dt = UPDATE_PERIOD_MS / 1000.0f;
