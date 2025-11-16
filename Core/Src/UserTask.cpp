@@ -48,10 +48,12 @@ void uartTask(void *pvPara) {
   
   while (true) {
     // 检查心跳（这个方法需要在循环中定期调用）
+    // This must run frequently to detect disconnection and trigger safe mode
     g_uart.checkHeartbeat();
     
-    // 延时，避免任务占用过多CPU
-    vTaskDelay(pdMS_TO_TICKS(50));  // 50ms延时，心跳检查不需要太频繁
+    // Short delay - heartbeat timeout is 5 seconds, so checking every 10ms is safe
+    // This ensures quick response to disconnection while not wasting CPU
+    vTaskDelay(pdMS_TO_TICKS(10));  // 10ms delay for responsive heartbeat checking
   }
 }
 
@@ -78,6 +80,67 @@ struct CANIdHistory {
 };
 volatile CANIdHistory can_id_history = {{0}, 0, 0};
 
+// Debug counter for DMJ4310 feedback (0x300)
+volatile uint32_t dmj4310_feedback_count = 0;
+
+// Debug: Track channel_10 value to see why it's stuck in IDLE
+volatile uint16_t debug_channel_10 = 0;
+
+// CAN bus recovery flag - set by error callback, checked by tasks
+volatile bool can_bus_off_recovery_needed = false;
+volatile uint32_t can_bus_off_recovery_time = 0;
+
+// Forward declaration of FDCAN handle (defined in fdcan.c)
+extern FDCAN_HandleTypeDef hfdcan1;
+
+// Shared helper functions for task optimization
+namespace TaskHelpers {
+  // Check and handle CAN bus recovery (non-blocking)
+  inline void checkCANRecovery(uint32_t current_time) {
+    if (can_bus_off_recovery_needed) {
+      if (current_time - can_bus_off_recovery_time >= 10) {
+        if (HAL_FDCAN_Start(&hfdcan1) == HAL_OK) {
+          can_bus_off_recovery_needed = false;
+        }
+      }
+    }
+  }
+  
+  // Monitor CAN error counters periodically (shared by both tasks)
+  inline void monitorCANErrors(uint32_t current_time) {
+    static uint32_t last_error_check_time = 0;
+    if (current_time - last_error_check_time >= 200) {
+      FDCAN_ErrorCountersTypeDef errorCounters;
+      if (HAL_FDCAN_GetErrorCounters(&hfdcan1, &errorCounters) == HAL_OK) {
+        if (errorCounters.TxErrorCnt > 64 || errorCounters.RxErrorCnt > 64) {
+          // High error rate detected - CAN bus may be experiencing issues
+          // The error callback will handle bus-off if it reaches 255
+        }
+      }
+      last_error_check_time = current_time;
+    }
+  }
+  
+  // Check chassis motor timeouts (optimized with early exit)
+  inline bool checkChassisMotorTimeout(uint32_t current_time) {
+    const uint32_t timeout_ms = 100;
+    if (motor_l_f_p && (current_time - motor_l_f_p->motor_feedback.last_update > timeout_ms)) return true;
+    if (motor_r_f_p && (current_time - motor_r_f_p->motor_feedback.last_update > timeout_ms)) return true;
+    if (motor_l_b_p && (current_time - motor_l_b_p->motor_feedback.last_update > timeout_ms)) return true;
+    if (motor_r_b_p && (current_time - motor_r_b_p->motor_feedback.last_update > timeout_ms)) return true;
+    return false;
+  }
+  
+  // Check claw motor timeouts (optimized with early exit)
+  inline bool checkClawMotorTimeout(uint32_t current_time) {
+    const uint32_t timeout_ms = 100;
+    if (gm6020_motor_p && (current_time - gm6020_motor_p->motor_feedback.last_update > timeout_ms)) return true;
+    if (s_m3508_claw_p && (current_time - s_m3508_claw_p->motor_feedback.last_update > timeout_ms)) return true;
+    if (dmj4310_motor_p && (current_time - dmj4310_motor_p->motor_feedback.last_update > timeout_ms)) return true;
+    return false;
+  }
+}
+
 extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs) {
   if ((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) == 0) return;
   
@@ -86,7 +149,7 @@ extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxF
   FDCAN_RxHeaderTypeDef rxHeader;
   uint8_t rxData[8];
   
-  while (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK) {
+  if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK) {
     uint16_t id = (uint16_t)rxHeader.Identifier;
     
     // Store CAN ID in history buffer (circular buffer)
@@ -116,7 +179,10 @@ extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxF
       
       // DMJ4310 feedback on Master ID 768 (0x300)
       case 0x300:  // Master ID = 768 (configured in motor)
-        if (dmj4310_motor_p) dmj4310_motor_p->readMotorFeedback(rxData);
+        if (dmj4310_motor_p) {
+          dmj4310_feedback_count++;  // Debug: track how many times we receive 0x300
+          dmj4310_motor_p->readMotorFeedback(rxData);
+        }
         break;
       // GM6020 feedback IDs: 0x205-0x20B for motor IDs 1-7
       
@@ -131,11 +197,14 @@ extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxF
 
 extern "C" void FDCAN1_ErrorStatusCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t ErrorStatusITs) {
   // Check for bus-off condition (critical error) and attempt recovery
+  // OPTIMIZATION: Use non-blocking recovery - set flag for task to handle
+  // HAL_Delay blocks entire system including other tasks - removed!
   if (ErrorStatusITs & FDCAN_FLAG_BUS_OFF) {
-    if (HAL_FDCAN_Stop(hfdcan) == HAL_OK) {
-      HAL_Delay(10);
-      HAL_FDCAN_Start(hfdcan);
-    }
+    // Stop CAN and set recovery flag
+    // Recovery will be handled by task context (non-blocking)
+    HAL_FDCAN_Stop(hfdcan);
+    can_bus_off_recovery_needed = true;
+    can_bus_off_recovery_time = HAL_GetTick();
   }
 }
 
@@ -161,33 +230,26 @@ void updateERTask(void *pvPara) {
   }
   
   while (true) {
-    // Check for motor timeouts (no feedback for >100ms = disconnected)
+    // OPTIMIZATION: Cache HAL_GetTick() result to avoid multiple calls
     uint32_t current_time = HAL_GetTick();
-    bool motor_timeout = false;
     
-    if (motor_l_f_p && (current_time - motor_l_f_p->motor_feedback.last_update > 100)) {
-      motor_timeout = true;
-    }
-    if (motor_r_f_p && (current_time - motor_r_f_p->motor_feedback.last_update > 100)) {
-      motor_timeout = true;
-    }
-    if (motor_l_b_p && (current_time - motor_l_b_p->motor_feedback.last_update > 100)) {
-      motor_timeout = true;
-    }
-    if (motor_r_b_p && (current_time - motor_r_b_p->motor_feedback.last_update > 100)) {
-      motor_timeout = true;
-    }
+    // Shared CAN recovery and monitoring (optimized helper functions)
+    TaskHelpers::checkCANRecovery(current_time);
+    TaskHelpers::monitorCANErrors(current_time);
     
-    // If any motor timed out, send zero commands for safety
-    if (motor_timeout) {
+    // Check for motor timeouts (optimized helper function with early exit)
+    if (TaskHelpers::checkChassisMotorTimeout(current_time)) {
+      // Safety: Send zero commands if any motor timed out
       er_status_control_p->sendMotorCurrents(0, 0, 0, 0);
     } else {
-      // Normal operation: Update wheel state and motors
-      er_status_control_p->switchState(g_uart.getReceivedValue());
-      er_status_control_p->update(g_uart.getReceivedValue());
+      // Normal operation: Get UART data once (atomic read, disables interrupts briefly)
+      // Then use it for both state switching and update to avoid multiple interrupt disables
+      uartdriver::ReceivedValue received_data = g_uart.getReceivedValue();
+      er_status_control_p->switchState(received_data);
+      er_status_control_p->update(received_data);
     }
     
-    vTaskDelay(pdMS_TO_TICKS(5)); 
+    vTaskDelay(pdMS_TO_TICKS(20));  // 50Hz update rate
   }
 }
 
@@ -200,30 +262,13 @@ void updateClawTask(void *pvPara) {
   if (!motors_initialized) {
     vTaskDelay(pdMS_TO_TICKS(200)); // Wait for CAN to stabilize
     
-    // Enable DMJ4310 motor
-    dmj4310_motor_p->enableMotor();
-    vTaskDelay(pdMS_TO_TICKS(100)); // Wait for motor to enable (LED should turn green)
-    
     // Set current DMJ4310 position as zero reference
-    // Zero position command: 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFE
-    uint8_t zero_cmd[8] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE};
-    extern FDCAN_HandleTypeDef hfdcan1;
-    FDCAN_TxHeaderTypeDef zero_header;
-    zero_header.Identifier = 1;  // DMJ4310 CAN ID
-    zero_header.IdType = FDCAN_STANDARD_ID;
-    zero_header.TxFrameType = FDCAN_DATA_FRAME;
-    zero_header.DataLength = FDCAN_DLC_BYTES_8;
-    zero_header.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
-    zero_header.BitRateSwitch = FDCAN_BRS_OFF;
-    zero_header.FDFormat = FDCAN_CLASSIC_CAN;
-    zero_header.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
-    zero_header.MessageMarker = 0;
-    
-    HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &zero_header, zero_cmd);
+    dmj4310_motor_p->setZeroPosition();
     vTaskDelay(pdMS_TO_TICKS(50));
     
     // Reset internal tracking in motor object so position starts at zero
     dmj4310_motor_p->resetData();
+    dmj4310_motor_p->enableMotor();
     
     // Send initial zero commands to GM6020 and M3508 claw motors
     gm6020_motor_p->sendCurrent(0);
@@ -231,33 +276,47 @@ void updateClawTask(void *pvPara) {
     
     motors_initialized = true;
   }
-  volatile static bool claw_timeout = false;
+
   while (true) {
+    // OPTIMIZATION: Cache HAL_GetTick() result to avoid multiple calls
     uint32_t current_time = HAL_GetTick();
     
-    // Check for claw motor timeouts (no feedback for >100ms = disconnected)
-    claw_timeout = false;
-    if (gm6020_motor_p && (current_time - gm6020_motor_p->motor_feedback.last_update > 100)) 
-      claw_timeout = true;
+    // Shared CAN recovery and monitoring (optimized helper functions)
+    TaskHelpers::checkCANRecovery(current_time);
+    TaskHelpers::monitorCANErrors(current_time);
     
-    if (s_m3508_claw_p && (current_time - s_m3508_claw_p->motor_feedback.last_update > 100)) 
-      claw_timeout = true;
+    // ALWAYS process UART data and update state machine, regardless of timeout
+    // Timeout only affects safety commands, not state machine logic
+    // OPTIMIZATION: Read UART data once and reuse (getReceivedValue disables interrupts)
+    uartdriver::ReceivedValue received_data = g_uart.getReceivedValue();
+    er_claw_control_p->switchState(received_data);
     
-    if (dmj4310_motor_p && (current_time - dmj4310_motor_p->motor_feedback.last_update > 100)) 
-      claw_timeout = true;
-    // If any claw motor timed out, send zero commands for safety
-    if (claw_timeout) {
+    //Check for claw motor timeouts (optimized helper function with early exit)
+    if (TaskHelpers::checkClawMotorTimeout(current_time)) {
+      // Safety: Send zero commands if any motor timed out (override normal commands)
+      // BUT: Still send keep-alive to DMJ4310 with proper Kp/Kd to keep it enabled
       if (gm6020_motor_p) gm6020_motor_p->sendCurrent(0);
       if (s_m3508_claw_p) s_m3508_claw_p->sendCurrent(0);
-      if (dmj4310_motor_p) dmj4310_motor_p->sendMITCommand(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
-      // DMJ4310 already gets zero command above
+      // DMJ4310: Send keep-alive with proper gains (not all zeros) to maintain enabled state
+      // Also send enable command if feedback is lost
+      if (dmj4310_motor_p) {
+        // If no feedback for >50ms, send enable command first
+        if (current_time - dmj4310_motor_p->motor_feedback.last_update > 50) {
+          dmj4310_motor_p->enableMotor();
+        }
+        // Always send keep-alive MIT command
+        dmj4310_motor_p->sendMITCommand(0.0f, 0.0f, 
+                                        dmj4310_motor_p->RPM_KP, 
+                                        dmj4310_motor_p->RPM_KD, 
+                                        0.0f);
+      }
     } else {
-      // Normal operation: Update claw state and motors
-      er_claw_control_p->switchState(g_uart.getReceivedValue());
-      er_claw_control_p->update(g_uart.getReceivedValue());
+      //Normal operation: Update state machine and send normal commands
+      
+      er_claw_control_p->update(received_data);
     }
     
-    vTaskDelay(pdMS_TO_TICKS(2));  
+    vTaskDelay(pdMS_TO_TICKS(9));  
   }
 }
 
@@ -375,19 +434,20 @@ void startUserTasks() {
   // NOTE: Cannot call vTaskDelay here - scheduler not started yet!
   // Motor enable commands will be sent from the ER task instead
 
-  // Create UART task (highest priority)
-  xTaskCreateStatic(uartTask, "UART_Task", configMINIMAL_STACK_SIZE * 8, NULL, 5,
+  // Create UART task (HIGHEST priority - critical for safety)
+  // FreeRTOS: Higher number = Higher priority
+  xTaskCreateStatic(uartTask, "UART_Task", configMINIMAL_STACK_SIZE * 8, NULL, 8,
                     uxUartTaskStack, &xUartTaskTCB);
   
-  // Create ER chassis update task (medium priority)
+  // Create ER chassis update task (high priority, runs at 50Hz)
   xTaskCreateStatic(updateERTask, "Chassis_Task", configMINIMAL_STACK_SIZE * 6, NULL, 6,
                     uxERTaskStack, &xERTaskTCB);
   
-  // Create claw update task (lower priority, runs at 50Hz)
-  xTaskCreateStatic(updateClawTask, "Claw_Task", configMINIMAL_STACK_SIZE * 8, NULL, 7,
+  // Create claw update task (higher priority, runs at 100Hz)
+  xTaskCreateStatic(updateClawTask, "Claw_Task", configMINIMAL_STACK_SIZE * 8, NULL, 9,
                     uxClawTaskStack, &xClawTaskTCB);
   
-  //mpu6500
+  //mpu6500 (low priority, runs at 1kHz)
   xTaskCreateStatic(mpuTask, "MPU_Task", configMINIMAL_STACK_SIZE * 4, NULL, 2,
                   uxMpuTaskStack, &xMpuTaskTCB);
   /**

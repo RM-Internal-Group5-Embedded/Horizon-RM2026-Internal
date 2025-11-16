@@ -45,21 +45,32 @@ static float computeDeltaTime(uint32_t& last_time_ms) {
 //Plan: use FSM to enable multiple states: |, & 0x0008 
 
 void ERStatusControl::switchState(const uartdriver::ReceivedValue& received_data) {
-    gold_Over = true;
-    if(received_data.channel_10 <=1024) {
+    // Safety: If channel_10 is low, always go to IDLE (disconnected/safe mode)
+    if(received_data.channel_10 <= 1024) {
         current_state = IDLE;
-    } else {
-        current_state = GOLD;
-        if(gold_Over){
-            if(received_data.channel_9 < 500) {
-            current_state = FAST;
-            } else if(received_data.channel_9 == 1024){
-            current_state = MANUAL;
-            } else if(received_data.channel_9 > 1500) {
-            current_state = MINING;
-            }
-        }
+        return;
     }
+    
+    // Active mode: Use channel_9 to select operation mode
+    // Use range checks instead of exact equality for robustness
+    // Channel 9 ranges:
+    //   < 500:    FAST mode
+    //   500-900:  GOLD mode (default/center position)
+    //   900-1150: MANUAL mode (around 1024 center, with tolerance)
+    //   > 1500:   MINING mode
+    if(received_data.channel_9 < 500) {
+        current_state = FAST;
+    } else if(received_data.channel_9 >= 900 && received_data.channel_9 <= 1150) {
+        // MANUAL mode: around center (1024) with ±150 tolerance
+        current_state = MANUAL;
+    } else if(received_data.channel_9 > 1500) {
+        current_state = MINING;
+    } else {
+        // Default to GOLD mode for middle ranges (500-900 or 1150-1500)
+        current_state = GOLD;
+    }
+    
+    gold_Over = true;  // Set flag for gold mode operations
 }
 
 void ERStatusControl::goldMode(){
@@ -283,11 +294,31 @@ void ERClawControl::idleMode() {
                                               claw_motors.base_claw->RPM_KP,
                                               claw_motors.base_claw->RPM_KD,
                                               0.0f);
-        // Optionally clear latched errors on startup
+        // OPTIMIZATION: Non-blocking error recovery using state machine
+        // Only attempt recovery once per error, don't block task with HAL_Delay
+        static uint32_t last_error_recovery_time = 0;
+        static bool recovery_in_progress = false;
+        static bool motor_disabled = false;
+        
         if (claw_motors.base_claw->hasError()) {
-            claw_motors.base_claw->disableMotor();
-            HAL_Delay(5);
-            claw_motors.base_claw->enableMotor();
+            uint32_t current_time = HAL_GetTick();
+            
+            if (!recovery_in_progress) {
+                // Start recovery: disable motor
+                claw_motors.base_claw->disableMotor();
+                motor_disabled = true;
+                recovery_in_progress = true;
+                last_error_recovery_time = current_time;
+            } else if (motor_disabled && (current_time - last_error_recovery_time >= 5)) {
+                // After 5ms delay (non-blocking), re-enable motor
+                claw_motors.base_claw->enableMotor();
+                motor_disabled = false;
+                recovery_in_progress = false;
+            }
+        } else {
+            // No error - reset recovery state
+            recovery_in_progress = false;
+            motor_disabled = false;
         }
     }
     // Send zero to both GM6020 and M3508 claw motors
@@ -303,12 +334,8 @@ void ERClawControl::idleMode() {
 void ERClawControl::claspMode(const uartdriver::ReceivedValue& received_data) {
     static uint32_t last_time = 0;
     float dt = computeDeltaTime(last_time);
-    
     int16_t gm6020_current = 0;
-    int16_t m3508_current = 0;
-
     float gm6020degree = 180*(static_cast<float>(received_data.channel_6) - CENTER) / SBUS_SPAN;
-    
     if (claw_motors.small_claw) {
         // Use PID to reach 720 degrees (2 full rotations)
         gm6020_current = claw_motors.small_claw->setAnglePID(gm6020degree, dt, true);
@@ -318,17 +345,10 @@ void ERClawControl::claspMode(const uartdriver::ReceivedValue& received_data) {
 void ERClawControl::releaseMode(const uartdriver::ReceivedValue& received_data) {
     static uint32_t last_time = 0;
     float dt = computeDeltaTime(last_time);
-    
     // Calculate PID for both claw motors
     int16_t gm6020_current = 0;
-    int16_t m3508_current = 0;
-    
     if (claw_motors.small_claw) {
         gm6020_current = claw_motors.small_claw->setAnglePID(0.0f, dt, true);
-    }
-    
-    if (claw_motors.m3508_claw) {
-        m3508_current = claw_motors.m3508_claw->setAnglePID(0.0f, dt, true);
     }
 }
 
@@ -338,16 +358,12 @@ void ERClawControl::upMode(const uartdriver::ReceivedValue& received_data) {
     float dt = computeDeltaTime(last_time);
     
     float m3508_angle = 0;
-    m3508_angle = 720*(static_cast<float>(received_data.channel_3) - CENTER) / SBUS_SPAN;
-    
+    m3508_angle = 180*(static_cast<float>(received_data.channel_3) - CENTER) / SBUS_SPAN;
+    float motor_position = 0.0f;  // Return to zero
+    motor_position = 5*(static_cast<float>(received_data.channel_5) - CENTER) / SBUS_SPAN;
 
     // DMJ4310 base claw control - RELEASE MODE: go to 0° (top shaft angle)
     if (claw_motors.base_claw) {
-        // 0° top shaft = 0° motor = 0 radians
-        float motor_position = 0.0f;  // Return to zero
-        motor_position = 180*(static_cast<float>(received_data.channel_5) - CENTER) / SBUS_SPAN;
-    
-
         // MIT command: position=12.566 rad, velocity=0, kp=50, kd=2, torque=0
         claw_motors.base_claw->sendMITCommand(motor_position, 0.01f, 
                                 claw_motors.base_claw->RPM_KP, 
@@ -370,8 +386,6 @@ void ERClawControl::downMode(const uartdriver::ReceivedValue& received_data) {
     if (claw_motors.base_claw) {
         // 0° top shaft = 0° motor = 0 radians
         float motor_position = 0.0f;  // Return to zero
-        //motor_position = 180*(static_cast<float>(received_data.channel_5) - CENTER) / SBUS_SPAN;
-    
         // MIT command: position=12.566 rad, velocity=0, kp=50, kd=2, torque=0
         claw_motors.base_claw->sendMITCommand(motor_position, 0.01f, 
                                 claw_motors.base_claw->RPM_KP, 
@@ -385,9 +399,19 @@ void ERClawControl::downMode(const uartdriver::ReceivedValue& received_data) {
 }
 
 void ERClawControl::switchState(const uartdriver::ReceivedValue& received_data) {
-    if(received_data.channel_10 <=1024) {
+    // Safety: channel_10 is used as enable/disable switch
+    // channel_10 = 240: UART disconnected (heartbeat mode) -> IDLE
+    // channel_10 <= 1024: Safety switch OFF (center or below) -> IDLE  
+    // channel_10 > 1024: Safety switch ON (upper half) -> Active mode
+    // Note: SBUS range is 240-1807, center is 1024
+    
+    // Store previous state to detect transition from IDLE
+    ClawState previous_state = current_state;
+    
+    if(received_data.channel_10 <= 1024) {
         current_state = ClawState::IDLE;
     } else {
+        // channel_10 > 1024: Active mode - process commands
         if (received_data.channel_7 < 500) {
             current_state = ClawState::RELEASE;
         } else {
@@ -401,6 +425,12 @@ void ERClawControl::switchState(const uartdriver::ReceivedValue& received_data) 
         }
     }
     
+    // Enable DMJ4310 motor when transitioning from IDLE to any active state
+    if (previous_state == ClawState::IDLE && current_state != ClawState::IDLE) {
+        if (claw_motors.base_claw) {
+            claw_motors.base_claw->enableMotor();
+        }
+    }
 }
 
 void ERClawControl::update(const uartdriver::ReceivedValue& received_data) {
@@ -422,11 +452,16 @@ void ERClawControl::update(const uartdriver::ReceivedValue& received_data) {
     if(current_state!= ClawState::IDLE)
     switch (arm_state) {
         case ArmState::UP:
+            //claw_motors.base_claw->enableMotor();
             upMode(received_data);
             break;
         case ArmState::DOWN:
+            //claw_motors.base_claw->enableMotor();
             downMode(received_data);
             break;
+    }
+    else {
+        
     }
 }
 

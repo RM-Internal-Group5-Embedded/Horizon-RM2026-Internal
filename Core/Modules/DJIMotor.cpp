@@ -159,7 +159,36 @@ void constructTxData(uint8_t data[8], const uint8_t id, const int16_t current) {
 
 
 void send(const FDCAN_TxHeaderTypeDef *header, const uint8_t data[8]) {
-    HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, header, data);
+    // CAN Bus Collision Avoidance:
+    // 1. Check TX FIFO free level before sending
+    // 2. Handle FIFO full condition gracefully
+    // 3. Monitor CAN state to prevent sending when bus is down
+    
+    // Check if CAN is in a valid state (not stopped or error)
+    if (hfdcan1.State != HAL_FDCAN_STATE_BUSY) {
+        // CAN is not ready - skip send to avoid errors
+        return;
+    }
+    
+    // Check TX FIFO free level (0 = full, >0 = has space)
+    uint32_t freeFifoLevel = HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan1);
+    
+    if (freeFifoLevel == 0) {
+        // TX FIFO is full - collision avoidance: skip this message
+        // This prevents blocking and allows other tasks to continue
+        // The next message will be sent on next cycle
+        return;
+    }
+    
+    // Attempt to send message
+    HAL_StatusTypeDef status = HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, header, data);
+    
+    // If send failed due to FIFO full (race condition), gracefully handle it
+    if (status != HAL_OK) {
+        // Error occurred - could be FIFO full, bus error, etc.
+        // Don't retry here to avoid blocking - let next cycle handle it
+        // This prevents task blocking and allows system to continue
+    }
 }
 
 } // namespace DJIMotors

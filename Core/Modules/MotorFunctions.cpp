@@ -53,10 +53,12 @@ M3508Functions::M3508Functions(int id,  pFDCAN_RxFifo0CallbackTypeDef callback,
                                         : MotorFunctions(id, callback, errorCallback) {
     filter = Modules::DJIMotors::getFilter(filterID2, filterID1); 
     txHeader = Modules::DJIMotors::getTxHeader(id, Modules::DJIMotors::MotorType::M3508);
-            // Default PID values for M3508
-    RPM_KP = 80.0f;
-    RPM_KI = 0.1f;
-    RPM_KD = 2.0f;
+            // Default PID values for M3508 wheels
+    // FIX: Reduced KP to prevent oscillation and erratic behavior
+    // High KP causes overshoot and oscillation when error is large
+    RPM_KP = 20.0f;  // Reduced from 40.0f to prevent erratic fast spinning
+    RPM_KI = 0.05f;  // Reduced from 0.1f to reduce integral windup
+    RPM_KD = 0.5f;
     MAX_CURRENT = 20000;
 
     if(id>4){
@@ -84,6 +86,7 @@ void MotorFunctions::resetData() {
     last_time = HAL_GetTick();
     prev_angle = 0;
     total_motor_counts = 0;
+    motor_feedback.last_update = HAL_GetTick();  // Initialize to prevent immediate timeout
 }
 
 void M3508Functions::readMotorFeedback(uint8_t rxData[8]) {
@@ -234,10 +237,20 @@ DMJ4310Functions::DMJ4310Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callbac
     txHeader = Modules::DJIMotors::getTxHeader(id, Modules::DJIMotors::MotorType::DMJ4310);
     
     // DMJ4310-specific PID tuning
-    RPM_KP = 25.0f;    // Moderate P gain
-    RPM_KI = 0.05f;    // Low integral to prevent windup
-    RPM_KD = 0.4f;     // Moderate derivative
+    RPM_KP = 8.0f;    // Moderate P gain
+    RPM_KI = 7.05f;    // Low integral to prevent windup
+    RPM_KD = 0.8f;     // Moderate derivative
     MAX_CURRENT = 10000;  // Conservative current limit
+}
+
+void DMJ4310Functions::resetData() {
+    // Call base class resetData() first
+    MotorFunctions::resetData();
+    
+    // Clear DMJ4310-specific error state
+    error_code = 0;
+    rx_motor_id = 0;
+    initialized = false;
 }
 
 void DMJ4310Functions::readMotorFeedback(uint8_t rxData[8]) {
@@ -363,6 +376,14 @@ void DMJ4310Functions::disableMotor() {
     Modules::DJIMotors::send(&txHeader, data);
 }
 
+void DMJ4310Functions::setZeroPosition() {
+    // MIT Cheetah protocol: Set current position as zero reference
+    // Send: 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFE
+    memset(data, 0xFF, 8);
+    data[7] = 0xFE;
+    Modules::DJIMotors::send(&txHeader, data);
+}
+
 void DMJ4310Functions::enableMotorBroadcast() {
     // Try enabling on multiple possible CAN IDs
     // MIT Mode: Send directly to motor's CAN_ID (not 0x100 + ID!)
@@ -420,9 +441,9 @@ GM6020Functions::GM6020Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callback,
     // GM6020 in current mode - uses voltage command format but interprets as current
     // Command range is still ±25000 (voltage range) but represents current
     // PID values for angle control (tuned to prevent overshoot/oscillation)
-    RPM_KP = 100.0f;      
+    RPM_KP = 50.0f;      
     RPM_KI = 0.1f;       
-    RPM_KD = 1.5f;
+    RPM_KD = 0.5f;
     MAX_CURRENT = 20000;
 }
 

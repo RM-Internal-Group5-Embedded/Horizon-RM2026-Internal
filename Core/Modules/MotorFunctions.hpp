@@ -41,7 +41,13 @@ public:
     MotorFunctions(int id,  pFDCAN_RxFifo0CallbackTypeDef       callback, 
                             pFDCAN_ErrorStatusCallbackTypeDef   errorCallback);
 
-    void resetData();
+    virtual void resetData();
+    
+    // Reset only PID state (integral and previous error) without resetting angle tracking
+    void resetPIDState() {
+        pid_integral = 0;
+        pid_prev_error = 0;
+    }
     
     virtual void readMotorFeedback(uint8_t rxData[8]);
 
@@ -123,12 +129,18 @@ public:
 
     void readMotorFeedback(uint8_t rxData[8]) override;
     
+    // Override resetData to also clear DMJ4310-specific error state
+    void resetData();
+    
     // MIT protocol: send position, velocity, Kp, Kd, and torque feedforward
     void sendMITCommand(float p_des, float v_des, float kp, float kd, float t_ff);
     
     // Enable/disable motor (must enable before use)
     void enableMotor();
     void disableMotor();
+    
+    // Set current position as zero reference (MIT protocol: 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFE)
+    void setZeroPosition();
     
     // Try enabling with different motor IDs (broadcast-like behavior)
     void enableMotorBroadcast();

@@ -1,4 +1,6 @@
 #include "mpu6500.hpp"
+#include "FreeRTOS.h"
+#include "task.h"
 #include <cmath>
 
 // MPU6500寄存器地址（使用constexpr，不占用内存且有类型检查）
@@ -57,7 +59,8 @@ namespace mpu6500
     bool MPU6500::init()
     {
         CS_HIGH();
-        HAL_Delay(100);
+        // OPTIMIZATION: Use vTaskDelay instead of HAL_Delay (allows other tasks to run)
+        vTaskDelay(pdMS_TO_TICKS(100));
         
         // 检查WHO_AM_I（MPU6500返回0x70）
         uint8_t who_am_i = readRegister(MPU6500_WHO_AM_I);
@@ -67,15 +70,15 @@ namespace mpu6500
         
         // 复位设备
         writeRegister(MPU6500_PWR_MGMT_1, 0x80);
-        HAL_Delay(100);
+        vTaskDelay(pdMS_TO_TICKS(100));
         
         // 唤醒设备，使用陀螺仪时钟
         writeRegister(MPU6500_PWR_MGMT_1, 0x01);
-        HAL_Delay(10);
+        vTaskDelay(pdMS_TO_TICKS(10));
         
         // 使能加速度计和陀螺仪
         writeRegister(MPU6500_PWR_MGMT_2, 0x00);
-        HAL_Delay(10);
+        vTaskDelay(pdMS_TO_TICKS(10));
         
         // 低通滤波器98Hz（平衡车推荐）
         writeRegister(MPU6500_CONFIG, 0x02);
@@ -86,7 +89,7 @@ namespace mpu6500
         // 加速度计量程 ±8g
         writeRegister(MPU6500_ACCEL_CONFIG, 0x10);  // 0x10 = 2<<3
         
-        HAL_Delay(10);
+        vTaskDelay(pdMS_TO_TICKS(10));
         return true;
     }
     
@@ -259,7 +262,9 @@ namespace mpu6500
             sum_y += gy_raw * gyro_scale_;
             sum_z += gz_raw * gyro_scale_;
             
-            HAL_Delay(1);
+            // OPTIMIZATION: Use vTaskDelay instead of HAL_Delay (allows other tasks to run)
+            // This prevents blocking the entire system during calibration (1000ms total)
+            vTaskDelay(pdMS_TO_TICKS(1));
         }
         
         gyro_offset_x_ = sum_x / samples;

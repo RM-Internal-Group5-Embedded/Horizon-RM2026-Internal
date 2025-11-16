@@ -134,8 +134,9 @@ namespace uartdriver
             HAL_StatusTypeDef status = HAL_UARTEx_ReceiveToIdle_DMA(&huart3, sbus_buf_, SBUS_DMA_BUF_LEN);
             
             // If restart failed, try one more time
+            // OPTIMIZATION: Use vTaskDelay instead of HAL_Delay (non-blocking for other tasks)
             if (status != HAL_OK) {
-                HAL_Delay(10);  // Brief delay
+                vTaskDelay(pdMS_TO_TICKS(10));  // Brief delay - allows other tasks to run
                 HAL_UARTEx_ReceiveToIdle_DMA(&huart3, sbus_buf_, SBUS_DMA_BUF_LEN);
             }
             
