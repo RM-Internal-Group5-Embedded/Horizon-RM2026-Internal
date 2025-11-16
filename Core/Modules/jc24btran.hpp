@@ -32,10 +32,13 @@ typedef struct _ack_data
 class DataTransceiver
 {
 private:
-    user_data rx_data_;          // 接收数据
-    ack_data ack_data_;          // 确认包数据
-    UART_HandleTypeDef* huart_;  // 串口句柄
-    uint8_t rx_buffer_[16];      // DMA接收缓冲区
+    user_data rx_data_;              // 接收的原始数据
+    ack_data ack_data_;              // 确认包数据
+    UART_HandleTypeDef* huart_;      // 串口句柄
+    uint8_t rx_buffer_[16];          // DMA接收缓冲区
+
+    bool positions_[4];       // 位置状态
+    uint8_t debounce_counters_[4];   // 去抖计数器
     
     // 连接状态
     bool connected_;             // 连接状态
@@ -48,6 +51,7 @@ private:
     // 常量定义
     static constexpr TickType_t WATCHDOG_TIMEOUT = pdMS_TO_TICKS(500);
     static constexpr TickType_t RECONNECT_RETRY_INTERVAL = pdMS_TO_TICKS(200);
+    static constexpr uint8_t DEBOUNCE_FRAMES = 3;    // 去抖阈值
 
     // 私有方法
     uint8_t calculateChecksum(const uint8_t* data, uint8_t len);
@@ -57,6 +61,8 @@ private:
     void checkWatchdog();        // 检查看门狗（在process中调用）
     void disconnect();           // 断连处理
     void tryReconnect();         // 尝试重连
+    void resetDebouncedState();  // 重置去抖状态
+    void updateDebouncedPositions(const user_data& data); // 更新稳定位置状态
 
 public:
     DataTransceiver();
@@ -69,7 +75,7 @@ public:
     bool send_ack(uint8_t status = 0);
     
     // 外部接口 - 获取位置数据（安全接口）
-    bool getPositions(uint8_t positions[4]);  // 返回false表示数据无效
+    bool getPositions(bool positions[4]);  // 返回false表示数据无效
     
     // 连接状态查询
     bool isConnected() const;

@@ -25,6 +25,7 @@ DataTransceiver::DataTransceiver()
     memset(&rx_data_, 0, sizeof(user_data));
     memset(&ack_data_, 0, sizeof(ack_data));
     memset(rx_buffer_, 0, sizeof(rx_buffer_));
+    resetDebouncedState();
 }
 
 // 析构函数
@@ -64,6 +65,44 @@ bool DataTransceiver::validateData(const user_data& data) {
     return true;
 }
 
+void DataTransceiver::resetDebouncedState() {
+    memset(positions_, 0, sizeof(positions_));
+    memset(debounce_counters_, 0, sizeof(debounce_counters_));
+}
+
+void DataTransceiver::updateDebouncedPositions(const user_data& data) {
+    const uint8_t raw_positions[4] = {
+        static_cast<uint8_t>(data.position1 != 0),
+        static_cast<uint8_t>(data.position2 != 0),
+        static_cast<uint8_t>(data.position3 != 0),
+        static_cast<uint8_t>(data.position4 != 0)
+    };
+
+    if (DEBOUNCE_FRAMES <= 1) {
+        for (uint8_t i = 0; i < 4; ++i) {
+            positions_[i] = (raw_positions[i] != 0);
+            debounce_counters_[i] = raw_positions[i] != 0 ? 1 : 0;
+        }
+        return;
+    }
+
+    for (uint8_t i = 0; i < 4; ++i) {
+        // 需要连续 DEBOUNCE_FRAMES 次同样的非零输入才会置位，
+        // 因此 PC 端必须持续周期性发送最新状态，而非仅在事件发生时单发一帧
+        if (raw_positions[i] != 0) {
+            if (debounce_counters_[i] < DEBOUNCE_FRAMES) {
+                debounce_counters_[i]++;
+            }
+        } else {
+            if (debounce_counters_[i] > 0) {
+                debounce_counters_[i]--;
+            }
+        }
+
+        positions_[i] = (debounce_counters_[i] >= DEBOUNCE_FRAMES);
+    }
+}
+
 // 刷新看门狗
 void DataTransceiver::refreshWatchdog() {
     last_rx_time_ = xTaskGetTickCount();
@@ -94,6 +133,7 @@ void DataTransceiver::disconnect() {
     // 清空接收数据
     memset(rx_buffer_, 0, sizeof(rx_buffer_));
     memset(&rx_data_, 0, sizeof(user_data));
+    resetDebouncedState();
     
     // 尝试重连
     // 立即标记为需要重连
@@ -147,6 +187,7 @@ void DataTransceiver::init(UART_HandleTypeDef* huart) {
     data_valid_ = false;
     reconnect_count_ = 0;
     last_reconnect_time_ = xTaskGetTickCount();
+    resetDebouncedState();
     
     // 启动DMA接收
     if (huart_ != nullptr) {
@@ -178,18 +219,18 @@ bool DataTransceiver::send_ack(uint8_t status) {
 }
 
 // 获取位置数据（安全接口）
-bool DataTransceiver::getPositions(uint8_t positions[4]) {
+bool DataTransceiver::getPositions(bool positions[4]) {
     if (!connected_ || !data_valid_) {
         // 数据无效，清零输出
         memset(positions, 0, 4);
         return false;
     }
     
-    // 复制位置数据
-    positions[0] = rx_data_.position1;
-    positions[1] = rx_data_.position2;
-    positions[2] = rx_data_.position3;
-    positions[3] = rx_data_.position4;
+    // 复制去抖后的稳定位置数据
+    positions[0] = positions_[0];
+    positions[1] = positions_[1];
+    positions[2] = positions_[2];
+    positions[3] = positions_[3];
     
     return true;
 }
@@ -227,6 +268,7 @@ void DataTransceiver::RxEventCallback(UART_HandleTypeDef* huart, uint16_t size) 
             
             // 数据有效，更新接收数据
             memcpy(&rx_data_, &temp_data, sizeof(user_data));
+            updateDebouncedPositions(rx_data_);
             
             // 刷新看门狗
             refreshWatchdog();

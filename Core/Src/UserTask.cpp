@@ -37,7 +37,7 @@ void transceiverTask(void *pvPara) {
     vTaskDelay(pdMS_TO_TICKS(200));
   }
   
-  uint8_t positions[4] = {0};
+  bool positions[4] = {0};
   uint32_t loop_count = 0;
   
   while (true) {
