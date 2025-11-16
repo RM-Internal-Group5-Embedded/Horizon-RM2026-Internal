@@ -70,30 +70,47 @@ GM6020Functions   * gm6020_motor_p  = nullptr;  // Small claw (ID 7)
 M3508Functions    * s_m3508_claw_p  = nullptr;  // Medium (ID 5)
 DMJ4310Functions  * dmj4310_motor_p = nullptr;  // Base claw (ID 1)
 
+// CAN ID history buffer for debugging (last 16 received IDs)
+struct CANIdHistory {
+  uint16_t ids[16];
+  uint8_t write_index;
+  uint8_t count;  // Number of valid entries (0-16)
+};
+volatile CANIdHistory can_id_history = {{0}, 0, 0};
+
 extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs) {
   if ((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) == 0) return;
   
+  // Process ALL pending messages in FIFO0 to avoid missing frames
+  // Using while loop ensures we don't miss any messages that arrived during processing
   FDCAN_RxHeaderTypeDef rxHeader;
   uint8_t rxData[8];
   
-  if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK) {
+  while (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK) {
     uint16_t id = (uint16_t)rxHeader.Identifier;
+    
+    // Store CAN ID in history buffer (circular buffer)
+    can_id_history.ids[can_id_history.write_index] = id;
+    can_id_history.write_index = (can_id_history.write_index + 1) % 16;
+    if (can_id_history.count < 16) {
+      can_id_history.count++;
+    }
     
     // Dispatch based on motor ID
     switch (id) {
-      case 0x201:  // M3508 motor 1
+      case 0x201:  // M3508 motor 1 (left-front)
         if (motor_l_f_p) motor_l_f_p->readMotorFeedback(rxData);
         break;
-      case 0x202:  // M3508 motor 2
+      case 0x202:  // M3508 motor 2 (right-front)
         if (motor_r_f_p) motor_r_f_p->readMotorFeedback(rxData);
         break;
-      case 0x203:  // M3508 motor 3
+      case 0x203:  // M3508 motor 3 (left-back)
         if (motor_l_b_p) motor_l_b_p->readMotorFeedback(rxData);
         break;
-      case 0x204:  // M3508 motor 4
+      case 0x204:  // M3508 motor 4 (right-back)
         if (motor_r_b_p) motor_r_b_p->readMotorFeedback(rxData);
         break;
-      case 0x205:  // M3508 motor 4
+      case 0x205:  // M3508 claw motor (ID 5)
         if (s_m3508_claw_p) s_m3508_claw_p->readMotorFeedback(rxData);
         break;
       
@@ -359,11 +376,11 @@ void startUserTasks() {
   // Motor enable commands will be sent from the ER task instead
 
   // Create UART task (highest priority)
-  xTaskCreateStatic(uartTask, "UART_Task", configMINIMAL_STACK_SIZE * 8, NULL, 3,
+  xTaskCreateStatic(uartTask, "UART_Task", configMINIMAL_STACK_SIZE * 8, NULL, 5,
                     uxUartTaskStack, &xUartTaskTCB);
   
   // Create ER chassis update task (medium priority)
-  xTaskCreateStatic(updateERTask, "Chassis_Task", configMINIMAL_STACK_SIZE * 6, NULL, 8,
+  xTaskCreateStatic(updateERTask, "Chassis_Task", configMINIMAL_STACK_SIZE * 6, NULL, 6,
                     uxERTaskStack, &xERTaskTCB);
   
   // Create claw update task (lower priority, runs at 50Hz)
@@ -371,7 +388,7 @@ void startUserTasks() {
                     uxClawTaskStack, &xClawTaskTCB);
   
   //mpu6500
-  xTaskCreateStatic(mpuTask, "MPU_Task", configMINIMAL_STACK_SIZE * 3, NULL, 2,
+  xTaskCreateStatic(mpuTask, "MPU_Task", configMINIMAL_STACK_SIZE * 4, NULL, 2,
                   uxMpuTaskStack, &xMpuTaskTCB);
   /**
    * @todo Add your own task here

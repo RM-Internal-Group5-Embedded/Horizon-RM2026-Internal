@@ -21,6 +21,7 @@ struct MotorFeedback {
     
     // Velocity
     int16_t rpm;               // Current speed (RPM)
+    int16_t bottomrpm;
     
     // Torque/Current
     int16_t current;           // Current torque or current

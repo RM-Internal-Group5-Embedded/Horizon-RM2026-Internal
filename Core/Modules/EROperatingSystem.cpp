@@ -72,10 +72,10 @@ void ERStatusControl::idleMode() {
     sendMotorCurrents(0, 0, 0, 0);
     
     // Reset PID states in each motor
-    manual_control.motor_front_left->resetData();
-    manual_control.motor_front_right->resetData();
-    manual_control.motor_back_left->resetData();
-    manual_control.motor_back_right->resetData();
+    //manual_control.motor_front_left->resetData();
+    //manual_control.motor_front_right->resetData();
+    //manual_control.motor_back_left->resetData();
+    //manual_control.motor_back_right->resetData();
 }
 
 void ERStatusControl::fastMode(const uartdriver::ReceivedValue& received_data) {

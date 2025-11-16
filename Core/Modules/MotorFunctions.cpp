@@ -107,10 +107,11 @@ void M3508Functions::readMotorFeedback(uint8_t rxData[8]) {
     prev_angle = current_angle;
     // Store data
     motor_feedback.angle = current_angle;
-    motor_feedback.rpm = (rxData[2] << 8) | rxData[3];
+    motor_feedback.bottomrpm = ((rxData[2] << 8) | rxData[3]);
     motor_feedback.current = (rxData[4] << 8) | rxData[5];
     motor_feedback.temperature = rxData[6];
     motor_feedback.last_update = current;
+    motor_feedback.rpm = motor_feedback.bottomrpm * (187.0f / 3591.0f);
 
     // Calculate top shaft angle (0-360°)
     // Total motor revolutions = total_motor_counts / 8191.0f
@@ -227,14 +228,15 @@ DMJ4310Functions::DMJ4310Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callbac
                                    pFDCAN_ErrorStatusCallbackTypeDef errorCallback,
                                    uint16_t filterID2, uint16_t filterID1)
                                    : MotorFunctions(id, callback, errorCallback) {
-    // DMJ4310 MIT mode: TX = motor CAN_ID, RX = master ID (0x300 default)
-    filter = Modules::DJIMotors::getFilter(0x300, 0x300);
+    // DMJ4310 MIT Mode: TX = motor's CAN_ID, RX = Master ID (default 0)
+    // The motor's CAN_ID must be set via debug assistant
+    filter = Modules::DJIMotors::getFilter(filterID2, filterID1);
     txHeader = Modules::DJIMotors::getTxHeader(id, Modules::DJIMotors::MotorType::DMJ4310);
     
     // DMJ4310-specific PID tuning
-    RPM_KP = 1.0f;    // Moderate P gain
+    RPM_KP = 25.0f;    // Moderate P gain
     RPM_KI = 0.05f;    // Low integral to prevent windup
-    RPM_KD = 0.1f;     // Moderate derivative
+    RPM_KD = 0.4f;     // Moderate derivative
     MAX_CURRENT = 10000;  // Conservative current limit
 }
 
