@@ -262,6 +262,10 @@ void updateClawTask(void *pvPara) {
   if (!motors_initialized) {
     vTaskDelay(pdMS_TO_TICKS(200)); // Wait for CAN to stabilize
     
+    // Enable DMJ4310 motor first
+    dmj4310_motor_p->enableMotor();
+    vTaskDelay(pdMS_TO_TICKS(100)); // Wait for motor to enable (LED should turn green)
+    
     // Set current DMJ4310 position as zero reference
     dmj4310_motor_p->setZeroPosition();
     vTaskDelay(pdMS_TO_TICKS(50));
@@ -316,7 +320,7 @@ void updateClawTask(void *pvPara) {
       er_claw_control_p->update(received_data);
     }
     
-    vTaskDelay(pdMS_TO_TICKS(9));  
+    vTaskDelay(pdMS_TO_TICKS(10));  // 100Hz update rate  
   }
 }
 
