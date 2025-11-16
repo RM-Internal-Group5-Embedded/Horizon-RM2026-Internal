@@ -89,8 +89,6 @@ Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_uart_ex.c
 CPP_SOURCES  = \
 $(wildcard Core/Src/*.cpp) \
 $(wildcard Core/Modules/*.cpp)
-$(wildcard Core/Src/*.cpp) \
-$(wildcard Core/Modules/*.cpp)
 
 # ASM sources
 ASM_SOURCES =  \

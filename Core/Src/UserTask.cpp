@@ -17,7 +17,7 @@
 
 
 // 全局UART实例
-uartdriver::Uart g_uart;
+// uartdriver::Uart g_uart;
 
 // 全局Line Follower实例（使用实际IR传感器引脚）
 LineFollower::SensorPins line_follower_pins = {
@@ -30,29 +30,29 @@ LineFollower::LineFollowerController g_line_follower(line_follower_pins);
 
 // 任务栈和控制块
 // UART任务栈 - 需要处理复杂的数据结构和DMA操作，使用更大的栈
-StackType_t uxUartTaskStack[configMINIMAL_STACK_SIZE * 8];  // 1024字节栈
-StaticTask_t xUartTaskTCB;
+// StackType_t uxUartTaskStack[configMINIMAL_STACK_SIZE * 8];  // 1024字节栈
+// StaticTask_t xUartTaskTCB;
 
-// 数据处理任务栈 - 用于处理接收到的数据
-StackType_t uxDataProcessTaskStack[configMINIMAL_STACK_SIZE * 2];  // 256字节 (1024 bytes)
-StaticTask_t xDataProcessTaskTCB;
+// // 数据处理任务栈 - 用于处理接收到的数据
+// StackType_t uxDataProcessTaskStack[configMINIMAL_STACK_SIZE * 2];  // 256字节 (1024 bytes)
+// StaticTask_t xDataProcessTaskTCB;
 
 // Line Follower任务栈 - 轻量级传感器读取和控制逻辑
 StackType_t uxLineFollowerTaskStack[configMINIMAL_STACK_SIZE * 2];  // 256字节 (1024 bytes)
 StaticTask_t xLineFollowerTaskTCB;
 // UART任务函数 - 负责UART初始化和看门狗检查
-void uartTask(void *pvPara) {
-  // 初始化UART
-  g_uart.init();
+// void uartTask(void *pvPara) {
+//   // 初始化UART
+//   g_uart.init();
   
-  while (true) {
-    // 检查心跳（这个方法需要在循环中定期调用）
-    g_uart.checkHeartbeat();
+//   while (true) {
+//     // 检查心跳（这个方法需要在循环中定期调用）
+//     g_uart.checkHeartbeat();
     
-    // 延时，避免任务占用过多CPU
-    vTaskDelay(pdMS_TO_TICKS(50));  // 50ms延时，心跳检查不需要太频繁
-  }
-}
+//     // 延时，避免任务占用过多CPU
+//     vTaskDelay(pdMS_TO_TICKS(50));  // 50ms延时，心跳检查不需要太频繁
+//   }
+// }
 
 // Line Follower任务函数 - 负责线循迹控制
 void lineFollowerTask(void *pvPara) {
@@ -81,9 +81,9 @@ void lineFollowerTask(void *pvPara) {
  */
 void startUserTasks() {
   // 创建UART处理任务 - 高优先级，负责UART通信和心跳检查
-  xTaskCreateStatic(uartTask, "UART_Task", configMINIMAL_STACK_SIZE * 8, NULL, 3,
-                    uxUartTaskStack, &xUartTaskTCB);
-  */
+  // xTaskCreateStatic(uartTask, "UART_Task", configMINIMAL_STACK_SIZE * 8, NULL, 3,
+  //                   uxUartTaskStack, &xUartTaskTCB);
+  
   
   // 数据处理任务暂时禁用 - 依赖UART
   /*
@@ -94,8 +94,5 @@ void startUserTasks() {
   // 创建Line Follower任务 - 中优先级，负责线循迹控制
   xTaskCreateStatic(lineFollowerTask, "LineFollower_Task", configMINIMAL_STACK_SIZE * 2, NULL, 2,
                     uxLineFollowerTaskStack, &xLineFollowerTaskTCB);
-  
-  /**
-   * @todo Add your own task here
-   */
+
 }
