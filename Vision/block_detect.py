@@ -138,6 +138,16 @@ def main():
 
     prev_inside = [False]*len(regions)  #记录上一帧每个区域是否有block
 
+    # 添加状态跟踪
+    current_positions = [0, 0, 0, 0]  # 当前所有区域状态
+    last_positions = [0, 0, 0, 0]     # 上一帧的状态
+    consecutive_frames = 0             # 连续相同状态的帧数
+    DEBOUNCE_THRESHOLD = 3             # 去抖阈值，与STM32端保持一致
+    
+    # 发送控制
+    send_interval = 0.1  # 100ms发送间隔
+    last_send_time = 0
+
     while True:
         ret,frame=capture.read()
         if not ret:
@@ -167,27 +177,53 @@ def main():
                     is_block=True             
             now_inside.append(is_block)
 
-        for i in range(len(regions)):
-            was_inside=prev_inside[i]
-            is_inside=now_inside[i]
+        # 计算新状态
+        new_positions = [1 if inside else 0 for inside in now_inside]
+        
+        # 视觉端去抖逻辑
+        if new_positions == last_positions:
+            consecutive_frames += 1
+        else:
+            consecutive_frames = 0
+            last_positions = new_positions.copy()
+         # 只有连续多帧状态稳定才更新当前状态
+        if consecutive_frames >= DEBOUNCE_THRESHOLD and new_positions != current_positions:
+            current_positions = new_positions.copy()
+            print(f"状态稳定确认: {current_positions}")
+        
+        # 定期发送当前位置（比如每0.5秒）或者状态变化时立即发送
+        current_time = time.time()
+        if current_time - last_send_time >= send_interval:
+            if transceiver and transceiver.connected:
+                ok = transceiver.send_positions(current_positions)
+                if ok:
+                    # print(f"发送位置: {current_positions}")  # 调试时可注释掉，减少输出
+                    pass
+                else:
+                    print("发送失败")
+            last_send_time = current_time
+        
+        # for i in range(len(regions)):
+        #     was_inside=prev_inside[i]
+        #     is_inside=now_inside[i]
             
-            if not was_inside and is_inside:
-                print("Block 到达第", i+1 ,"个区域") #无线传输
-                positions=regions_to_positions(i)
-                ok = False
-                if transceiver.connect():
-                    ok=transceiver.send_positions(positions)
-                    if ok:
-                        print("发送成功: ", positions)
-                if not ok:
-                    print("首次发送失败，尝试重连并重发...")
-                    # 尝试重连一次
-                    time.sleep(0.05)
-                    ok2=transceiver.send_positions(positions)
-                    if ok2:
-                        print("重连后发送成功")
-                    else:
-                        print("重连后仍然发送失败（请检查串口或接收端）")
+        #     if not was_inside and is_inside:
+        #         print("Block 到达第", i+1 ,"个区域") #无线传输
+        #         positions=regions_to_positions(i)
+        #         ok = False
+        #         if transceiver.connect():
+        #             ok=transceiver.send_positions(positions)
+        #             if ok:
+        #                 print("发送成功: ", positions)
+        #         if not ok:
+        #             print("首次发送失败，尝试重连并重发...")
+        #             # 尝试重连一次
+        #             time.sleep(0.05)
+        #             ok2=transceiver.send_positions(positions)
+        #             if ok2:
+        #                 print("重连后发送成功")
+        #             else:
+        #                 print("重连后仍然发送失败（请检查串口或接收端）")
       
         #更新
         prev_inside = now_inside.copy()
