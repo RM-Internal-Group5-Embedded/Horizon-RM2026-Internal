@@ -92,7 +92,7 @@ def draw_regions(img,regions):
         poly=regions[index]
         cv2.polylines(img,[np.int32(poly)],True,(0,255,0),2)
         if len(poly)>0:
-            text='R'+chr(index+1+ord('A'))
+            text='R'+str(index+1)
             #绘制字符串 画布，字符串，坐标，字体序号，缩放系数，颜色，粗细，线条类型(以下实线)
             cv2.putText(img,text, tuple(poly[0]), cv2.FONT_HERSHEY_SIMPLEX,0.7,(0,255,0),2,1)
 
@@ -102,154 +102,181 @@ def regions_to_positions(index):
     return positions
 
 def main():
-    regions=load_regions()
-    if not regions:
-        return 
-    
-    capture=cv2.VideoCapture(0)
-    if capture.isOpened():
-        print("USB相机连接成功")
-    else:
-        print("USB相机连接失败")
-        return 
-    
-
-    # 自动查找JC24B设备
-    jc24b_port = find_jc24b_port()
-    if not jc24b_port:
-        print("未找到JC24B设备，请检查连接")
-        # 或者让用户手动输入
-        jc24b_port = input("请手动输入设备路径 (如 /dev/tty.usbserial-XXXX): ").strip()
-    
-    transceiver = None
-    if jc24b_port:
-        print(f"尝试连接JC24B设备: {jc24b_port}")
-        transceiver = JC24BTransceiver(port=jc24b_port)
-        if transceiver.connect():
-            print("JC24B设备连接成功")
+    try:
+        regions=load_regions()
+        if not regions:
+            return 
+        
+        capture=cv2.VideoCapture(0)
+        if capture.isOpened():
+            print("USB相机连接成功")
         else:
-            print("JC24B设备连接失败，将运行无通信版本")
-            transceiver = None
-    else:
-        print("无法确定JC24B设备，将运行无通信版本")
+            print("USB相机连接失败")
+            return 
+        
+
+        # 自动查找JC24B设备
+        jc24b_port = find_jc24b_port()
+        if not jc24b_port:
+            print("未找到JC24B设备，请检查连接")
+            # 或者让用户手动输入
+            jc24b_port = input("请手动输入设备路径 (如 /dev/tty.usbserial-XXXX): ").strip()
+        
         transceiver = None
-
-
-
-    prev_inside = [False]*len(regions)  #记录上一帧每个区域是否有block
-
-    # 添加状态跟踪
-    current_positions = [0, 0, 0, 0]  # 当前所有区域状态
-    last_positions = [0, 0, 0, 0]     # 上一帧的状态
-    consecutive_frames = 0             # 连续相同状态的帧数
-    DEBOUNCE_THRESHOLD = 3             # 去抖阈值，与STM32端保持一致
-    
-    # 发送控制
-    send_interval = 0.1  # 100ms发送间隔
-    last_send_time = 0
-
-    while True:
-        ret,frame=capture.read()
-        if not ret:
-            print("无法读取视频帧")
-            break
-        
-        #mask:处理后的二值图像 detections:检测到的block列表，包含位置和中心点
-        mask,detections = detect_blocks(frame)
-
-        #画出regions区域
-        canvas=frame.copy()
-        draw_regions(canvas,regions)
-        for d in detections:
-            x1,y1,x2,y2=d['block']
-            cx,cy=d['centre']
-            #橙色矩形框:block 橙色圆点:block中心
-            cv2.rectangle(canvas,(x1,y1),(x2,y2),(0, 200, 255), 2)
-            cv2.circle(canvas,(int(cx),int(cy)), 4, (0, 200, 255), -1)
-
-        #检测block中心是否在regions内
-        #本次情况
-        now_inside=[]
-        for poly in regions:
-            is_block=False
-            for d in detections:
-                if point_in_region(d['centre'],poly):
-                    is_block=True             
-            now_inside.append(is_block)
-
-        # 计算新状态
-        new_positions = [1 if inside else 0 for inside in now_inside]
-        
-        # 视觉端去抖逻辑
-        if new_positions == last_positions:
-            consecutive_frames += 1
+        if jc24b_port:
+            print(f"尝试连接JC24B设备: {jc24b_port}")
+            transceiver = JC24BTransceiver(port=jc24b_port)
+            if transceiver.connect():
+                print("JC24B设备连接成功")
+                transceiver.last_ack_time = time.time()
+            else:
+                print("JC24B设备连接失败，将运行无通信版本")
+                transceiver = None
         else:
-            consecutive_frames = 0
-            last_positions = new_positions.copy()
-         # 只有连续多帧状态稳定才更新当前状态
-        if consecutive_frames >= DEBOUNCE_THRESHOLD and new_positions != current_positions:
-            current_positions = new_positions.copy()
-            print(f"状态稳定确认: {current_positions}")
-        
-        # 定期发送当前位置（比如每0.5秒）或者状态变化时立即发送
-        current_time = time.time()
-        if current_time - last_send_time >= send_interval:
-            if transceiver and transceiver.connected:
-                ok = transceiver.send_positions(current_positions)
-                if ok:
-                    # print(f"发送位置: {current_positions}")  # 调试时可注释掉，减少输出
-                    pass
-                else:
-                    print("发送失败")
-            last_send_time = current_time
-        
-        # for i in range(len(regions)):
-        #     was_inside=prev_inside[i]
-        #     is_inside=now_inside[i]
-            
-        #     if not was_inside and is_inside:
-        #         print("Block 到达第", i+1 ,"个区域") #无线传输
-        #         positions=regions_to_positions(i)
-        #         ok = False
-        #         if transceiver.connect():
-        #             ok=transceiver.send_positions(positions)
-        #             if ok:
-        #                 print("发送成功: ", positions)
-        #         if not ok:
-        #             print("首次发送失败，尝试重连并重发...")
-        #             # 尝试重连一次
-        #             time.sleep(0.05)
-        #             ok2=transceiver.send_positions(positions)
-        #             if ok2:
-        #                 print("重连后发送成功")
-        #             else:
-        #                 print("重连后仍然发送失败（请检查串口或接收端）")
-      
-        #更新
-        prev_inside = now_inside.copy()
-        
-        #显示画面
-        cv2.imshow('view', canvas)
-        #cv2.imshow('mask', mask)
- 
-        # 改进的按键检测 - 使用更长的等待时间并添加异常处理
-        try:
-            key = cv2.waitKey(30) & 0xFF  # 增加到30ms，减少CPU使用率
-            if key == ord('q'):
-                print("收到退出指令，正在关闭...")
-                break
-            elif key == 27:  # ESC键
-                print("收到ESC退出指令,正在关闭...")
-                break
-        except KeyboardInterrupt:
-            print("收到中断信号，正在关闭...")
-            break
-        
+            print("无法确定JC24B设备，将运行无通信版本")
+            transceiver = None
 
-    capture.release()
-    cv2.destroyAllWindows()
-    transceiver.disconnect()
-    print("程序退出，串口已关闭")
+
+
+        # 添加状态跟踪
+        current_positions = [0, 0, 0, 0]  # 当前所有区域状态
+        last_positions = [0, 0, 0, 0]     # 上一帧的状态
+        consecutive_frames = 0             # 连续相同状态的帧数
+        DEBOUNCE_THRESHOLD = 3             # 去抖阈值，与STM32端保持一致
+        
+        # 发送控制
+        send_interval = 0.1  # 100ms发送间隔
+        last_send_time = 0
+        # 通信状态
+        connection_healthy = False
+        ack_timeout = 0.5  # 500ms，与STM32看门狗一致
+
+        while True:
+            ret,frame=capture.read()
+            if not ret:
+                print("无法读取视频帧")
+                break
+            
+            #mask:处理后的二值图像 detections:检测到的block列表，包含位置和中心点
+            mask,detections = detect_blocks(frame)
+
+            #画出regions区域
+            canvas=frame.copy()
+            draw_regions(canvas,regions)
+            for d in detections:
+                x1,y1,x2,y2=d['block']
+                cx,cy=d['centre']
+                #橙色矩形框:block 橙色圆点:block中心
+                cv2.rectangle(canvas,(x1,y1),(x2,y2),(0, 200, 255), 2)
+                cv2.circle(canvas,(int(cx),int(cy)), 4, (0, 200, 255), -1)
+
+            #检测block中心是否在regions内
+            #本次情况
+            now_inside=[]
+            for poly in regions:
+                is_block=False
+                for d in detections:
+                    if point_in_region(d['centre'],poly):
+                        is_block=True             
+                now_inside.append(is_block)
+
+            # 计算新状态
+            new_positions = [1 if inside else 0 for inside in now_inside]
+            
+            # 视觉端去抖逻辑
+            if new_positions == last_positions:
+                consecutive_frames += 1
+            else:
+                consecutive_frames = 0
+                last_positions = new_positions.copy()
+            # 只有连续多帧状态稳定才更新当前状态
+            if consecutive_frames >= DEBOUNCE_THRESHOLD and new_positions != current_positions:
+                current_positions = new_positions.copy()
+                print(f"状态稳定确认: {current_positions}")
+            
+            # 定期发送当前位置（比如每0.5秒）或者状态变化时立即发送
+            current_time = time.time()
+            if current_time - last_send_time >= send_interval:
+                if transceiver and transceiver.connected:
+                    ok = transceiver.send_positions(current_positions)
+                    if ok:
+                        # print(f"发送位置: {current_positions}")  # 调试时可注释掉，减少输出
+                        pass
+                    else:
+                        print("发送失败")
+                        transceiver.connect() 
+                last_send_time = current_time
+            
+            # for i in range(len(regions)):
+            #     was_inside=prev_inside[i]
+            #     is_inside=now_inside[i]
+                
+            #     if not was_inside and is_inside:
+            #         print("Block 到达第", i+1 ,"个区域") #无线传输
+            #         positions=regions_to_positions(i)
+            #         ok = False
+            #         if transceiver.connect():
+            #             ok=transceiver.send_positions(positions)
+            #             if ok:
+            #                 print("发送成功: ", positions)
+            #         if not ok:
+            #             print("首次发送失败，尝试重连并重发...")
+            #             # 尝试重连一次
+            #             time.sleep(0.05)
+            #             ok2=transceiver.send_positions(positions)
+            #             if ok2:
+            #                 print("重连后发送成功")
+            #             else:
+            #                 print("重连后仍然发送失败（请检查串口或接收端）")
+            # 检查ACK和通信状态
+            if transceiver:
+                # 非阻塞检查ACK
+                transceiver.check_for_ack()
+                    
+            # 检查通信状态
+            if hasattr(transceiver, 'last_ack_time'):
+                if current_time - transceiver.last_ack_time <= ack_timeout:
+                    if not connection_healthy:
+                        print("通信连接正常")
+                        connection_healthy = True
+                else:
+                    if connection_healthy:
+                        print("警告: 通信连接异常 - 未收到ACK")
+                        connection_healthy = False
+                
+            # 显示状态信息
+            status_color = (0, 255, 0) if connection_healthy else (0, 0, 255)
+            cv2.putText(canvas, f"通信: {'正常' if connection_healthy else '异常'}", 
+                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
+                            
+            cv2.putText(canvas, f"位置: {current_positions}", 
+                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                
+            cv2.putText(canvas, f"连续帧: {consecutive_frames}/{DEBOUNCE_THRESHOLD}", 
+                    (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            
+            #显示画面
+            cv2.imshow('view', canvas)
+            #cv2.imshow('mask', mask)
+    
+            # 按键检测
+            key = cv2.waitKey(30) & 0xFF
+            if key == ord('q') or key == 27:
+                print("收到退出指令")
+                break
+
+    except KeyboardInterrupt:
+        print("\n程序被用户中断")
+    except Exception as e:
+        print(f"程序发生错误: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        capture.release()
+        cv2.destroyAllWindows()
+        if transceiver:
+            transceiver.disconnect()
+        print("程序已退出")
 
 if __name__=='__main__':
     main()

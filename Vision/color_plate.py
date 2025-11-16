@@ -93,6 +93,7 @@ def main():
     # 读取区域配置
     region_points = load_region_config()
     use_region = region_points is not None
+    region_mask = None
 
     #使用opencv调用电脑中的摄像头 需要传入摄像头的序号 到设备管理器中看
     capture=cv2.VideoCapture(0)

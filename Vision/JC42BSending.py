@@ -21,7 +21,7 @@ class JC24BTransceiver:
         self.reconnect_count = 0
         self.last_ack_time = 0
         self.ack_timeout = 0.5  # 500ms确认超时
-        
+
         # 线程锁
         self.lock = threading.Lock()
         
@@ -135,13 +135,9 @@ class JC24BTransceiver:
         
         try:
             with self.lock:
-                # 构建数据包
                 packet = self.build_position_packet(positions)
-                
-                # 发送数据
-                self.ser.write(packet)
+                self.ser.write(packet)  
                 self.ser.flush()
-                print(f"发送位置: {positions}")
                 return True
                 
         except Exception as e:
@@ -169,10 +165,10 @@ class JC24BTransceiver:
                         self.last_ack_time = time.time()
                         return True
                     else:
-                        print("收到无效确认包")
+                        print("收到无效ACK包")
                         
         except Exception as e:
-            print(f"读取数据失败: {e}")
+            print(f"读取ACK失败: {e}")
             
         return False
     
