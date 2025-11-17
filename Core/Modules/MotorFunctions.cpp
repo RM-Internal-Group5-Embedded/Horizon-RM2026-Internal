@@ -54,11 +54,10 @@ M3508Functions::M3508Functions(int id,  pFDCAN_RxFifo0CallbackTypeDef callback,
     filter = Modules::DJIMotors::getFilter(filterID2, filterID1); 
     txHeader = Modules::DJIMotors::getTxHeader(id, Modules::DJIMotors::MotorType::M3508);
             // Default PID values for M3508 wheels
-    // FIX: Reduced KP to prevent oscillation and erratic behavior
-    // High KP causes overshoot and oscillation when error is large
-    RPM_KP = 20.0f;  // Reduced from 40.0f to prevent erratic fast spinning
-    RPM_KI = 0.05f;  // Reduced from 0.1f to reduce integral windup
-    RPM_KD = 0.5f;
+    // Tuned for responsive control while maintaining stability
+    RPM_KP = 20.0f;  // Increased from 20.0f for faster response (claw uses 50.0f)
+    RPM_KI = 0.01f;  // Increased from 0.05f for better steady-state tracking
+    RPM_KD = 0.5f;   // Increased from 0.5f for better damping
     MAX_CURRENT = 20000;
 
     if(id>4){

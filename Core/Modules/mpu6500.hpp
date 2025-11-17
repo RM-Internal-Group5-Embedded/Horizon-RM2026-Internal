@@ -9,18 +9,14 @@ namespace mpu6500
 {
     // 传感器数据结构
     struct SensorData {
-        // 陀螺仪（角速度，单位：度/秒）
-        float gyro_x;
-        float gyro_y;
-        float gyro_z;
-        
-        // 加速度计（单位：m/s²）
-        float accel_x;
-        float accel_y;
-        float accel_z;
-        
-        // 温度（单位：°C）
-        float temp;
+        // 原始传感器数据
+        float accel_x;  // 加速度X (m/s²)
+        float accel_y;  // 加速度Y (m/s²)
+        float accel_z;  // 加速度Z (m/s²)
+        float gyro_x;   // 陀螺仪X (度/秒)
+        float gyro_y;   // 陀螺仪Y (度/秒)
+        float gyro_z;   // 陀螺仪Z (度/秒)
+        float temperature;  // 温度 (°C)
         
         // 计算出的倾角（单位：度）
         float pitch;  // 俯仰角（前后倾斜）
@@ -81,13 +77,11 @@ namespace mpu6500
         // Mahony滤波器状态
         float q0_, q1_, q2_, q3_;
         float ex_int_, ey_int_, ez_int_;
-        float rotation_matrix_[3][3];
         float kp_;
         float ki_;
         float last_dt_;
         float integral_limit_;
         
-        void updateRotationMatrix();
         void clampDt(float& dt);
         void normalizeQuaternion();
         

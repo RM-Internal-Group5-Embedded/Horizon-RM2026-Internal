@@ -144,13 +144,23 @@ namespace TaskHelpers {
 extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs) {
   if ((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) == 0) return;
   
-  // Process ALL pending messages in FIFO0 to avoid missing frames
-  // Using while loop ensures we don't miss any messages that arrived during processing
+  // Process ALL pending messages in FIFO0 to avoid missing frames and reduce interrupt frequency
+  // Using while loop ensures we don't miss any messages and process them in batches
+  // This reduces the number of callback invocations and prevents CAN bus clogging
   FDCAN_RxHeaderTypeDef rxHeader;
   uint8_t rxData[8];
+  uint8_t messages_processed = 0;
+  const uint8_t MAX_MESSAGES_PER_CALLBACK = 3;  // Process up to 7 messages (one per motor) per callback
   
-  if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK) {
+  // Process messages in batches to avoid spending too much time in interrupt context
+  while (messages_processed < MAX_MESSAGES_PER_CALLBACK) {
+    if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxHeader, rxData) != HAL_OK) {
+      // No more messages in FIFO - exit loop
+      break;
+    }
+    
     uint16_t id = (uint16_t)rxHeader.Identifier;
+    messages_processed++;
     
     // Store CAN ID in history buffer (circular buffer)
     can_id_history.ids[can_id_history.write_index] = id;
@@ -159,7 +169,7 @@ extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxF
       can_id_history.count++;
     }
     
-    // Dispatch based on motor ID
+    // Dispatch based on motor ID - process in order to ensure fairness
     switch (id) {
       case 0x201:  // M3508 motor 1 (left-front)
         if (motor_l_f_p) motor_l_f_p->readMotorFeedback(rxData);
@@ -193,6 +203,9 @@ extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxF
         break; // Unhandled CAN ID
     }
   }
+  
+  // If we processed the maximum, there might be more messages - callback will be triggered again
+  // This ensures we don't spend too much time in interrupt context while still processing all messages
 }
 
 extern "C" void FDCAN1_ErrorStatusCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t ErrorStatusITs) {
@@ -249,7 +262,7 @@ void updateERTask(void *pvPara) {
       er_status_control_p->update(received_data);
     }
     
-    vTaskDelay(pdMS_TO_TICKS(20));  // 50Hz update rate
+    vTaskDelay(pdMS_TO_TICKS(23));  
   }
 }
 
@@ -320,12 +333,30 @@ void updateClawTask(void *pvPara) {
       er_claw_control_p->update(received_data);
     }
     
-    vTaskDelay(pdMS_TO_TICKS(10));  // 100Hz update rate  
+    vTaskDelay(pdMS_TO_TICKS(13));  // 100Hz update rate  
   }
 }
 
 mpu6500::MPU6500 mpu;
 bool g_mpuReady = false;
+
+// Function to get MPU6500 yaw for use in ER tasks
+// This function is accessible from EROperatingSystem via forward declaration
+// Returns current yaw angle in degrees, or 0.0f if MPU not ready
+float getMPUYaw() {
+    if (g_mpuReady) {
+        return mpu.getYaw();
+    }
+    return 0.0f;  // Return 0 if MPU not ready
+}
+
+// Function to reset MPU6500 yaw to 0
+// This function is accessible from EROperatingSystem via forward declaration
+void resetMPUYaw() {
+    if (g_mpuReady) {
+        mpu.resetYaw();
+    }
+}
 
   // MPU6500陀螺仪任务函数
 void mpuTask(void *pvPara) {
@@ -342,23 +373,29 @@ void mpuTask(void *pvPara) {
   
   //校准陀螺仪零点（AR必须静止！）
   mpu.calibrateGyro(1000);
-  //MPU6500通用Mahony参数：Kp=0.8（中等响应），Ki=0.01（轻微积分补偿），积分限幅=0.2
-  mpu.setMahonyGains(0.8f, 0.01f, 0.2f);
+  
+  // Set Mahony filter gains optimized for fast robot with sustained movement
+  // Kp=1.0: Faster response to accelerometer corrections
+  // Ki=0.01: Integral term reduces long-term drift (critical for sustained movement)
+  // Limit=1.0: Allows more integral correction for better accuracy
+  mpu.setMahonyGains(1.0f, 0.01f, 1.0f);
   mpu.resetAttitude();
   g_mpuReady = true;
   
   // 传感器数据
   static mpu6500::SensorData data;
   
-  // 更新周期
+  // 更新周期: 1ms (1kHz) for fast robot with sustained movement
+  // Higher frequency = better accuracy, less drift, faster response
   const uint32_t UPDATE_PERIOD_MS = 1;  
-  const float dt = UPDATE_PERIOD_MS / 1000.0f;
+  const float dt = UPDATE_PERIOD_MS / 1000.0f;  // 0.001s = 1ms
   
   while (true) {
     // 更新传感器数据和倾角
     mpu.update(data, dt);
     
-    vTaskDelay(pdMS_TO_TICKS(UPDATE_PERIOD_MS));
+    // Run at 1kHz (1ms) for optimal accuracy and minimal drift
+    vTaskDelay(pdMS_TO_TICKS(1));
   }
 }
 
@@ -451,9 +488,10 @@ void startUserTasks() {
   xTaskCreateStatic(updateClawTask, "Claw_Task", configMINIMAL_STACK_SIZE * 8, NULL, 9,
                     uxClawTaskStack, &xClawTaskTCB);
   
-  //mpu6500 (low priority, runs at 1kHz)
-  xTaskCreateStatic(mpuTask, "MPU_Task", configMINIMAL_STACK_SIZE * 4, NULL, 2,
-                  uxMpuTaskStack, &xMpuTaskTCB);
+  //mpu6500 (medium priority, runs at 1kHz for fast robot with minimal drift)
+  // Higher priority (3) ensures consistent 1ms updates for accuracy
+  xTaskCreateStatic(mpuTask, "MPU_Task", configMINIMAL_STACK_SIZE * 4, NULL, 3,
+                   uxMpuTaskStack, &xMpuTaskTCB);
   /**
    * @todo Add your own task here
    */

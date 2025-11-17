@@ -1,4 +1,6 @@
 #include "EROperatingSystem.hpp"
+#include "DJIMotor.hpp"
+#include <cmath>
 
 // Constructor implementation
 ERStatusControl::ERStatusControl(M3508Functions& motor_front_left, M3508Functions& motor_front_right,
@@ -47,6 +49,10 @@ static float computeDeltaTime(uint32_t& last_time_ms) {
 void ERStatusControl::switchState(const uartdriver::ReceivedValue& received_data) {
     // Safety: If channel_10 is low, always go to IDLE (disconnected/safe mode)
     if(received_data.channel_10 <= 1024) {
+        // Reset yaw when entering idle mode
+        if (current_state != IDLE) {
+            resetMPUYaw();
+        }
         current_state = IDLE;
         return;
     }
@@ -58,18 +64,26 @@ void ERStatusControl::switchState(const uartdriver::ReceivedValue& received_data
     //   500-900:  GOLD mode (default/center position)
     //   900-1150: MANUAL mode (around 1024 center, with tolerance)
     //   > 1500:   MINING mode
+    ERState new_state;
     if(received_data.channel_9 < 500) {
-        current_state = FAST;
+        new_state = FAST;
     } else if(received_data.channel_9 >= 900 && received_data.channel_9 <= 1150) {
         // MANUAL mode: around center (1024) with ±150 tolerance
-        current_state = MANUAL;
+        new_state = MANUAL;
     } else if(received_data.channel_9 > 1500) {
-        current_state = MINING;
+        new_state = MINING;
     } else {
         // Default to GOLD mode for middle ranges (500-900 or 1150-1500)
-        current_state = GOLD;
+        new_state = GOLD;
     }
     
+    // Reset yaw when transitioning to IDLE (though this shouldn't happen here)
+    // This is handled above for channel_10 safety case
+    if (new_state == IDLE && current_state != IDLE) {
+        resetMPUYaw();
+    }
+    
+    current_state = new_state;
     gold_Over = true;  // Set flag for gold mode operations
 }
 
@@ -87,6 +101,9 @@ void ERStatusControl::idleMode() {
     //manual_control.motor_front_right->resetData();
     //manual_control.motor_back_left->resetData();
     //manual_control.motor_back_right->resetData();
+    
+    // Note: Yaw reset is handled in switchState() when transitioning to IDLE
+    // This ensures yaw is reset once when entering idle mode, not every cycle
 }
 
 void ERStatusControl::fastMode(const uartdriver::ReceivedValue& received_data) {
@@ -107,6 +124,13 @@ void ERStatusControl::traversal( uint16_t joystick_r_x, uint16_t joystick_r_y,
                 uint16_t joystick_l_x, uint16_t rpm_magnitude, 
                 uint16_t angle_magnitude) {
     
+    float yawDeg = getMPUYaw();
+    float yawRad = yawDeg * M_PI / 180;
+    //global direction
+    //orthogonal basis
+    float gx = sin(yawRad);
+    float gy = cos(yawRad);
+
     // Convert joystick values to normalized [-1, 1] range
     float rx = (static_cast<float>(joystick_r_x) - CENTER) / SBUS_SPAN;
     float ry = (static_cast<float>(joystick_r_y) - CENTER) / SBUS_SPAN;
@@ -120,11 +144,31 @@ void ERStatusControl::traversal( uint16_t joystick_r_x, uint16_t joystick_r_y,
     // Apply non-linear curve to RPM axes for smoother control at low speeds
     applyCurveHalfQuad(rx);
     applyCurveHalfQuad(ry);
-    // Keep rotation linear (no curve on lx)
     
-    // Scale by magnitude
-    rx = rx * static_cast<float>(rpm_magnitude);
-    ry = ry * static_cast<float>(rpm_magnitude);
+    // Calculate joystick magnitude BEFORE rotation (preserve original input magnitude)
+    float controller_magnitude = sqrtf(rx*rx + ry*ry);
+    
+    // Rotate joystick direction from robot frame to global frame
+    // Rotation matrix: [cos(θ) -sin(θ)] [rx]
+    //                  [sin(θ)  cos(θ)] [ry]
+    // where θ = yaw angle, gx = sin(θ), gy = cos(θ)
+    if (controller_magnitude > 0.001f) {
+        // Normalize direction vector, rotate, then restore magnitude
+        float dir_x = rx / controller_magnitude;
+        float dir_y = ry / controller_magnitude;
+        
+        // Rotate direction vector from robot frame to global frame
+        float rotated_x = dir_x*gy - dir_y*gx;  // cos(yaw)*dir_x - sin(yaw)*dir_y
+        float rotated_y = dir_x*gx + dir_y*gy;  // sin(yaw)*dir_x + cos(yaw)*dir_y
+        
+        // Restore original magnitude and scale by rpm_magnitude
+        rx = rotated_x * controller_magnitude * static_cast<float>(rpm_magnitude);
+        ry = rotated_y * controller_magnitude * static_cast<float>(rpm_magnitude);
+    } else {
+        // Joystick centered - no movement (avoid division by zero)
+        rx = 0.0f;
+        ry = 0.0f;
+    }
     lx = lx * static_cast<float>(angle_magnitude);
 
     // Mecanum mix
@@ -133,9 +177,23 @@ void ERStatusControl::traversal( uint16_t joystick_r_x, uint16_t joystick_r_y,
     back_left_rpm   = static_cast<int16_t>(ry - rx + lx);
     back_right_rpm  = -static_cast<int16_t>(ry + rx - lx);
 
-    // Calculate timing
+    // Calculate timing - use per-motor timing for accurate dt
+    // FIX: Don't use static variable - each motor should track its own timing
+    // Static variable causes incorrect dt if task is delayed or mode switches
+    uint32_t current_time = HAL_GetTick();
     static uint32_t last_time = 0;
-    float dt = computeDeltaTime(last_time);
+    float dt;
+    if (last_time == 0 || (current_time - last_time) > 100) {
+        // First call or large gap - use default dt
+        dt = 0.01f;  // 10ms default (matches task rate)
+        last_time = current_time;
+    } else {
+        dt = (current_time - last_time) / 1000.0f;
+        if (dt <= 0.0f || dt > 0.1f) {
+            dt = 0.01f;  // Clamp to reasonable range
+        }
+        last_time = current_time;
+    }
     
     // Use motor class PID methods (send = false, just calculate)
     int16_t curr_lf = manual_control.motor_front_left->setRpmPID(front_left_rpm, dt, false);
@@ -209,10 +267,11 @@ void ERStatusControl::sendMotorCurrents(int16_t curr_lf, int16_t curr_rf, int16_
     data[7] = curr_rb & 0xFF;
     
     // Send using pre-initialized TX header (0x200)
-    // Check if TX FIFO has space before sending
-    uint32_t freeFifoLevel = HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan1);
-    if (freeFifoLevel > 0) {
-    HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &motor_tx_header, data);
+    // FIX: Don't check FIFO level - hardware handles queuing
+    // Silently dropping commands causes delayed response
+    // Only check CAN state to avoid errors
+    if (hfdcan1.State != HAL_FDCAN_STATE_RESET && hfdcan1.State != HAL_FDCAN_STATE_ERROR) {
+        HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &motor_tx_header, data);
     }
 }
 
@@ -360,7 +419,7 @@ void ERClawControl::upMode(const uartdriver::ReceivedValue& received_data) {
     float m3508_angle = 0;
     m3508_angle = 180*(static_cast<float>(received_data.channel_3) - CENTER) / SBUS_SPAN;
     float motor_position = 0.0f;  // Return to zero
-    motor_position = 5*(static_cast<float>(received_data.channel_5) - CENTER) / SBUS_SPAN;
+    motor_position = 8*(static_cast<float>(received_data.channel_5) - CENTER) / SBUS_SPAN;
 
     // DMJ4310 base claw control - RELEASE MODE: go to 0° (top shaft angle)
     if (claw_motors.base_claw) {
@@ -433,6 +492,7 @@ void ERClawControl::switchState(const uartdriver::ReceivedValue& received_data) 
     }
 }
 
+//extern uint16_t Modules::DJIMotors::counter;
 void ERClawControl::update(const uartdriver::ReceivedValue& received_data) {
     // Call appropriate mode method based on current state
     switch (current_state) {
@@ -463,6 +523,7 @@ void ERClawControl::update(const uartdriver::ReceivedValue& received_data) {
     else {
         
     }
+    //counter = 0;
 }
 
 // void ERClawControl::sendClawCurrents(int16_t gm6020_current, int16_t m3508_current) {

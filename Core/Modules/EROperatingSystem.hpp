@@ -7,6 +7,10 @@
 #include <cstring>
 #include <cmath>
 
+// Forward declaration for MPU yaw access
+float getMPUYaw();   // Get current yaw angle from MPU6500 (degrees)
+void resetMPUYaw();  // Reset yaw angle to 0 (for idle mode)
+
 
 struct ManualControl {
     //Four Mecanum Wheels

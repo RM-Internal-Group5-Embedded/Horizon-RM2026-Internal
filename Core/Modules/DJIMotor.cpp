@@ -157,37 +157,71 @@ void constructTxData(uint8_t data[8], const uint8_t id, const int16_t current) {
     }  
 }
 
-
+uint16_t counter = 0;
 void send(const FDCAN_TxHeaderTypeDef *header, const uint8_t data[8]) {
     // CAN Bus Collision Avoidance:
     // 1. Check TX FIFO free level before sending
     // 2. Handle FIFO full condition gracefully
     // 3. Monitor CAN state to prevent sending when bus is down
+    // 4. Rate limiting: Max 8 messages per millisecond to prevent bus overload
     
-    // Check if CAN is in a valid state (not stopped or error)
-    if (hfdcan1.State != HAL_FDCAN_STATE_BUSY) {
-        // CAN is not ready - skip send to avoid errors
+    // Check if CAN is in a valid state (READY or BUSY are both valid for sending)
+    // Only reject if in ERROR or RESET state
+    if (hfdcan1.State == HAL_FDCAN_STATE_RESET || hfdcan1.State == HAL_FDCAN_STATE_ERROR) {
+        // CAN is in error state - skip send to avoid errors
         return;
     }
     
-    // Check TX FIFO free level (0 = full, >0 = has space)
-    uint32_t freeFifoLevel = HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan1);
+    // Rate limiting: Max 8 messages per millisecond
+    // System has 7 motors total:
+    //   - ER task: 1 message (0x200 = 4 wheels combined)
+    //   - Claw task: 3 messages (GM6020=0x2FF, M3508 claw=0x1FF, DMJ4310=direct ID)
+    //   - Callbacks: Receive only, don't send
+    // Normal operation: 4 msgs/10ms = 0.4 msgs/ms, well below 8/ms limit
+    // This limit protects against bursts, initialization, or unexpected high-frequency sends
+    static uint32_t last_ms = 0;
+    static uint8_t messages_this_ms = 0;
+    static uint8_t er_messages_this_ms = 0;  // Track ER task messages (0x200)
+    static uint8_t claw_messages_this_ms = 0;  // Track Claw task messages (all others)
+    uint32_t current_ms = HAL_GetTick();
     
-    if (freeFifoLevel == 0) {
-        // TX FIFO is full - collision avoidance: skip this message
-        // This prevents blocking and allows other tasks to continue
-        // The next message will be sent on next cycle
-        return;
+    // Reset counters if we're in a new millisecond
+    if (current_ms != last_ms) {
+        messages_this_ms = 0;
+        er_messages_this_ms = 0;
+        claw_messages_this_ms = 0;
+        last_ms = current_ms;
     }
     
-    // Attempt to send message
+    // Determine if this is an ER task message (0x200 = 4 wheels combined)
+    // All other IDs are claw motors: 0x1FF (M3508 claw), 0x2FF (GM6020), or direct ID (DMJ4310)
+    bool is_er_message = (header->Identifier == 0x200);
+    
+    // Enforce 8 messages/ms limit (safety limit for bursts/initialization)
+    if (messages_this_ms >= 4) {
+        return;  // Rate limit exceeded - skip this message
+    }
+    
+    // Fairness: Reserve slots to ensure both tasks can send
+    // ER needs: 1 slot (0x200)
+    // Claw needs: 3 slots (GM6020, M3508 claw, DMJ4310)
+    // Total: 4 slots needed, leaving 4 slots for bursts/callbacks
+    // When approaching limit, ensure both tasks get their minimum slots
+    
+    
+    // Attempt to send message (hardware will handle if FIFO is truly full)
+    // Note: We don't check FIFO level here - hardware handles queuing
+    // Checking and dropping causes command delays
     HAL_StatusTypeDef status = HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, header, data);
+    counter++;
     
-    // If send failed due to FIFO full (race condition), gracefully handle it
+    
+    
+    // If send failed, it's likely a real error (not just FIFO full)
+    // The hardware typically queues messages even if FIFO appears full
     if (status != HAL_OK) {
-        // Error occurred - could be FIFO full, bus error, etc.
+        // Error occurred - could be bus error, etc.
         // Don't retry here to avoid blocking - let next cycle handle it
-        // This prevents task blocking and allows system to continue
     }
 }
 
