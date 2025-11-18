@@ -51,15 +51,21 @@ void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, sensor_1_Pin|sensor_2_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, jc24b_pd_Pin|jc24b_set_Pin, GPIO_PIN_RESET);
+  // HAL_GPIO_WritePin(GPIOB, LED1_Pin|LED2_Pin|SEG_E_Pin|SEG_D_Pin
+  //                         |SEG_C_Pin|SEG_B_Pin|SEG_A_Pin|LED0_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(MPU6500_CS_GPIO_Port, MPU6500_CS_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
+  // HAL_GPIO_WritePin(GPIOC, SEG_G_Pin|SEG_F_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin : PA1 */
+  GPIO_InitStruct.Pin = GPIO_PIN_1;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
   HAL_GPIO_WritePin(GPIOB, sensor_3_Pin|sensor_4_Pin|jga_left_backward_Pin|jga_right_backward_Pin
                           |jga_left_forward_Pin|jga_right_forward_Pin, GPIO_PIN_RESET);
 
@@ -91,9 +97,15 @@ void MX_GPIO_Init(void)
   HAL_GPIO_Init(MPU6500_CS_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PBPin PBPin PBPin PBPin
+<<<<<<< HEAD
                            PBPin PBPin */
   GPIO_InitStruct.Pin = sensor_3_Pin|sensor_4_Pin|jga_left_backward_Pin|jga_right_backward_Pin
                           |jga_left_forward_Pin|jga_right_forward_Pin;
+=======
+                           PBPin PBPin PBPin PBPin PBPin */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|LED1_Pin|LED2_Pin|SEG_E_Pin|SEG_D_Pin
+                          |SEG_C_Pin|SEG_B_Pin|SEG_A_Pin|LED0_Pin;
+>>>>>>> dev_ar_vision
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;

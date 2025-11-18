@@ -60,6 +60,23 @@ void SystemClock_Config(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+// 配置PB10为推挽输出，用于给JC24B供电
+void JC24B_Power_Init(void) {
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    
+    GPIO_InitStruct.Pin = GPIO_PIN_10;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+    
+    // 输出高电平（3.3V）
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_SET);
+    
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -125,7 +142,13 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_DMA_Init();
+  MX_TIM1_Init();
+  MX_TIM2_Init();
+  MX_USART2_UART_Init();
   MX_USART3_UART_Init();
+
+  JC24B_Power_Init();
+
   MX_SPI1_Init();
   MX_TIM2_Init();
   MX_TIM15_Init();
