@@ -45,8 +45,8 @@ namespace mpu6500
         // 校准陀螺仪零点（平衡车启动时静止状态调用）
         void calibrateGyro(uint16_t samples = 1000);
 
-        // Mahony滤波参数与姿态管理
-        void setMahonyGains(float kp, float ki, float integral_limit = 0.5f);
+        // Madgwick滤波参数（Beta）
+        void setMadgwickBeta(float beta);
         void resetAttitude(float pitch_deg = 0.0f,
                            float roll_deg = 0.0f,
                            float yaw_deg = 0.0f);
@@ -74,13 +74,10 @@ namespace mpu6500
         float gyro_scale_;
         float accel_scale_;
         
-        // Mahony滤波器状态
+        // Madgwick滤波器状态
         float q0_, q1_, q2_, q3_;
-        float ex_int_, ey_int_, ez_int_;
-        float kp_;
-        float ki_;
+        float beta_;
         float last_dt_;
-        float integral_limit_;
         
         void clampDt(float& dt);
         void normalizeQuaternion();

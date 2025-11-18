@@ -124,7 +124,8 @@ void ERStatusControl::traversal( uint16_t joystick_r_x, uint16_t joystick_r_y,
                 uint16_t joystick_l_x, uint16_t rpm_magnitude, 
                 uint16_t angle_magnitude) {
     
-    float yawDeg = getMPUYaw();
+    //float yawDeg = getMPUYaw();
+    float yawDeg = 0;
     float yawRad = yawDeg * M_PI / 180;
     //global direction
     //orthogonal basis
@@ -177,9 +178,6 @@ void ERStatusControl::traversal( uint16_t joystick_r_x, uint16_t joystick_r_y,
     back_left_rpm   = static_cast<int16_t>(ry - rx + lx);
     back_right_rpm  = -static_cast<int16_t>(ry + rx - lx);
 
-    // Calculate timing - use per-motor timing for accurate dt
-    // FIX: Don't use static variable - each motor should track its own timing
-    // Static variable causes incorrect dt if task is delayed or mode switches
     uint32_t current_time = HAL_GetTick();
     static uint32_t last_time = 0;
     float dt;
@@ -346,13 +344,16 @@ ERClawControl::ERClawControl(DMJ4310Functions& base_motor, GM6020Functions& smal
 
 void ERClawControl::idleMode() {
     // Stop all claw motors
-    // Always keep DMJ4301 alive by issuing a zero command
+    // Always keep DMJ4310 alive by issuing a zero command and periodic enable
     if (claw_motors.base_claw) {
-        claw_motors.base_claw->sendMITCommand(0.0f,
-                                              0.0f,
-                                              claw_motors.base_claw->RPM_KP,
-                                              claw_motors.base_claw->RPM_KD,
-                                              0.0f);
+        // Send periodic enable command to keep motor enabled (required for feedback)
+        static uint32_t last_enable_time = 0;
+        uint32_t current_time = HAL_GetTick();
+        // Send enable command every 100ms to keep motor enabled
+        if (current_time - last_enable_time >= 100) {
+            claw_motors.base_claw->enableMotor();
+            last_enable_time = current_time;
+        }
         // OPTIMIZATION: Non-blocking error recovery using state machine
         // Only attempt recovery once per error, don't block task with HAL_Delay
         static uint32_t last_error_recovery_time = 0;
@@ -360,8 +361,6 @@ void ERClawControl::idleMode() {
         static bool motor_disabled = false;
         
         if (claw_motors.base_claw->hasError()) {
-            uint32_t current_time = HAL_GetTick();
-            
             if (!recovery_in_progress) {
                 // Start recovery: disable motor
                 claw_motors.base_claw->disableMotor();
@@ -404,10 +403,11 @@ void ERClawControl::claspMode(const uartdriver::ReceivedValue& received_data) {
 void ERClawControl::releaseMode(const uartdriver::ReceivedValue& received_data) {
     static uint32_t last_time = 0;
     float dt = computeDeltaTime(last_time);
-    // Calculate PID for both claw motors
     int16_t gm6020_current = 0;
+    float gm6020degree = -70.0f;
     if (claw_motors.small_claw) {
-        gm6020_current = claw_motors.small_claw->setAnglePID(0.0f, dt, true);
+        // Use PID to reach 720 degrees (2 full rotations)
+        gm6020_current = claw_motors.small_claw->setAnglePID(gm6020degree, dt, true);
     }
 }
 
@@ -417,12 +417,53 @@ void ERClawControl::upMode(const uartdriver::ReceivedValue& received_data) {
     float dt = computeDeltaTime(last_time);
     
     float m3508_angle = 0;
-    m3508_angle = 180*(static_cast<float>(received_data.channel_3) - CENTER) / SBUS_SPAN;
-    float motor_position = 0.0f;  // Return to zero
+    m3508_angle = 360*(static_cast<float>(received_data.channel_3) - CENTER) / SBUS_SPAN;
+    // float motor_position = 0.0f;  // Return to zero
+    // motor_position = 8*(static_cast<float>(received_data.channel_5) - CENTER) / SBUS_SPAN;
+
+    // DMJ4310 base claw control - RELEASE MODE: go to 0° (top shaft angle)
+    if (claw_motors.base_claw) {
+        // Ensure motor is enabled before sending commands
+        static uint32_t last_enable_time = 0;
+        uint32_t current_time = HAL_GetTick();
+        // Send enable command periodically (every 100ms) to keep motor enabled
+        if (current_time - last_enable_time >= 100) {
+            claw_motors.base_claw->enableMotor();
+            last_enable_time = current_time;
+        }
+        // claw_motors.base_claw->sendMITCommand(motor_position, 0.01f, 
+        //                         claw_motors.base_claw->RPM_KP, 
+        //                         claw_motors.base_claw->RPM_KD, 
+        //                         claw_motors.base_claw->RPM_KI);
+        claw_motors.base_claw->sendMITCommand(0, 0.01f, 
+                                0, 
+                                0, 
+                                0);
+    }
+
+    if (claw_motors.m3508_claw) {
+        m3508_angle = claw_motors.m3508_claw->setAnglePID(m3508_angle, dt, true);
+    }
+}
+
+void ERClawControl::downMode(const uartdriver::ReceivedValue& received_data) {
+    static uint32_t last_time = 0;
+    float dt = computeDeltaTime(last_time);
+    float m3508_angle = 0;
+    m3508_angle = 360*(static_cast<float>(received_data.channel_3) - CENTER) / SBUS_SPAN;
+    float motor_position = 0.0f; 
     motor_position = 8*(static_cast<float>(received_data.channel_5) - CENTER) / SBUS_SPAN;
 
     // DMJ4310 base claw control - RELEASE MODE: go to 0° (top shaft angle)
     if (claw_motors.base_claw) {
+        // Ensure motor is enabled before sending commands
+        static uint32_t last_enable_time = 0;
+        uint32_t current_time = HAL_GetTick();
+        // Send enable command periodically (every 100ms) to keep motor enabled
+        if (current_time - last_enable_time >= 100) {
+            claw_motors.base_claw->enableMotor();
+            last_enable_time = current_time;
+        }
         // MIT command: position=12.566 rad, velocity=0, kp=50, kd=2, torque=0
         claw_motors.base_claw->sendMITCommand(motor_position, 0.01f, 
                                 claw_motors.base_claw->RPM_KP, 
@@ -435,28 +476,6 @@ void ERClawControl::upMode(const uartdriver::ReceivedValue& received_data) {
     }
 }
 
-void ERClawControl::downMode(const uartdriver::ReceivedValue& received_data) {
-    static uint32_t last_time = 0;
-    float dt = computeDeltaTime(last_time);
-     
-    float m3508_angle = 0;
-    
-    // DMJ4310 base claw control - RELEASE MODE: go to 0° (top shaft angle)
-    if (claw_motors.base_claw) {
-        // 0° top shaft = 0° motor = 0 radians
-        float motor_position = 0.0f;  // Return to zero
-        // MIT command: position=12.566 rad, velocity=0, kp=50, kd=2, torque=0
-        claw_motors.base_claw->sendMITCommand(motor_position, 0.01f, 
-                                claw_motors.base_claw->RPM_KP, 
-                                claw_motors.base_claw->RPM_KD, 
-                                claw_motors.base_claw->RPM_KI);
-    }
-
-    if (claw_motors.m3508_claw) {
-        m3508_angle = claw_motors.m3508_claw->setAnglePID(0, dt, true);
-    }
-}
-
 void ERClawControl::switchState(const uartdriver::ReceivedValue& received_data) {
     // Safety: channel_10 is used as enable/disable switch
     // channel_10 = 240: UART disconnected (heartbeat mode) -> IDLE
@@ -464,7 +483,7 @@ void ERClawControl::switchState(const uartdriver::ReceivedValue& received_data) 
     // channel_10 > 1024: Safety switch ON (upper half) -> Active mode
     // Note: SBUS range is 240-1807, center is 1024
     
-    // Store previous state to detect transition from IDLE
+    // Store previous state to detect transition from/to IDLE
     ClawState previous_state = current_state;
     
     if(received_data.channel_10 <= 1024) {
@@ -472,15 +491,15 @@ void ERClawControl::switchState(const uartdriver::ReceivedValue& received_data) 
     } else {
         // channel_10 > 1024: Active mode - process commands
         if (received_data.channel_7 < 500) {
-            current_state = ClawState::RELEASE;
-        } else {
             current_state = ClawState::CLASP;
+        } else {
+            current_state = ClawState::RELEASE;
         }
 
         if (received_data.channel_8 < 500) {
-            arm_state = ArmState::UP;
-        } else {
             arm_state = ArmState::DOWN;
+        } else {
+            arm_state = ArmState::UP;
         }
     }
     

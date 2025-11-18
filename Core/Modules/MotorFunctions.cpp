@@ -55,7 +55,7 @@ M3508Functions::M3508Functions(int id,  pFDCAN_RxFifo0CallbackTypeDef callback,
     txHeader = Modules::DJIMotors::getTxHeader(id, Modules::DJIMotors::MotorType::M3508);
             // Default PID values for M3508 wheels
     // Tuned for responsive control while maintaining stability
-    RPM_KP = 20.0f;  // Increased from 20.0f for faster response (claw uses 50.0f)
+    RPM_KP = 40.0f;  // Increased from 20.0f for faster response (claw uses 50.0f)
     RPM_KI = 0.01f;  // Increased from 0.05f for better steady-state tracking
     RPM_KD = 0.5f;   // Increased from 0.5f for better damping
     MAX_CURRENT = 20000;
@@ -236,9 +236,9 @@ DMJ4310Functions::DMJ4310Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callbac
     txHeader = Modules::DJIMotors::getTxHeader(id, Modules::DJIMotors::MotorType::DMJ4310);
     
     // DMJ4310-specific PID tuning
-    RPM_KP = 8.0f;    // Moderate P gain
-    RPM_KI = 7.05f;    // Low integral to prevent windup
-    RPM_KD = 0.8f;     // Moderate derivative
+    RPM_KP = 4.0f;    // Moderate P gain
+    RPM_KI = 0.5f;    // Low integral to prevent windup
+    RPM_KD = 0.5f;     // Moderate derivative
     MAX_CURRENT = 10000;  // Conservative current limit
 }
 
@@ -440,9 +440,9 @@ GM6020Functions::GM6020Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callback,
     // GM6020 in current mode - uses voltage command format but interprets as current
     // Command range is still ±25000 (voltage range) but represents current
     // PID values for angle control (tuned to prevent overshoot/oscillation)
-    RPM_KP = 50.0f;      
+    RPM_KP = 70.0f;      
     RPM_KI = 0.1f;       
-    RPM_KD = 0.5f;
+    RPM_KD = 0.7f;
     MAX_CURRENT = 20000;
 }
 

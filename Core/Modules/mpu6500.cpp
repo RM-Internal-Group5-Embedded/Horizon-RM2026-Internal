@@ -38,20 +38,15 @@ namespace mpu6500
         , q1_(0.0f)
         , q2_(0.0f)
         , q3_(0.0f)
-        , ex_int_(0.0f)
-        , ey_int_(0.0f)
-        , ez_int_(0.0f)
-        , kp_(1.0f)  // Increased from 0.5f for faster response
-        , ki_(0.01f)  // Increased from 0.0f to reduce drift (critical for sustained movement)
+        , beta_(0.1f)  // Default Madgwick beta (tunable)
         , last_dt_(0.001f)
-        , integral_limit_(1.0f)  // Increased from 0.5f to allow more integral correction
 
     {
         // Gyroscope ±2000°/s range
         // Sensitivity: 16.4 LSB/°/s (from MPU6500 datasheet)
         // Scale: 1/16.4 = 0.060975 °/s per LSB
         // Alternative: 2000/32768 = 0.061035 (very close, using official sensitivity)
-        gyro_scale_ = 2000.0f /32768 ;  // More accurate: uses official sensitivity
+        gyro_scale_ = 0.063400002 ;  // More accurate: uses official sensitivity
         
         // Accelerometer ±8g range
         // Sensitivity: 4096 LSB/g (from MPU6500 datasheet)
@@ -148,7 +143,12 @@ namespace mpu6500
         float gy_rad = gy * deg2rad;
         float gz_rad = gz * deg2rad;
 
-        // ==================== Mahony Filter ====================
+        // ==================== Madgwick Filter ====================
+        float qDot1 = 0.5f * (-q1_ * gx_rad - q2_ * gy_rad - q3_ * gz_rad);
+        float qDot2 = 0.5f * ( q0_ * gx_rad + q2_ * gz_rad - q3_ * gy_rad);
+        float qDot3 = 0.5f * ( q0_ * gy_rad - q1_ * gz_rad + q3_ * gx_rad);
+        float qDot4 = 0.5f * ( q0_ * gz_rad + q1_ * gy_rad - q2_ * gx_rad);
+
         float acc_mag = sqrtf(ax*ax + ay*ay + az*az);
         const float ACC_MIN = 4.0f;   // ≈0.4g
         const float ACC_MAX = 15.0f;  // ≈1.5g
@@ -158,46 +158,30 @@ namespace mpu6500
             ay *= inv_norm;
             az *= inv_norm;
 
-            // 由四元数估计重力方向
-            float vx = 2.0f * (q1_ * q3_ - q0_ * q2_);
-            float vy = 2.0f * (q0_ * q1_ + q2_ * q3_);
-            float vz = 1.0f - 2.0f * (q1_*q1_ + q2_*q2_);
+            // 计算目标与估计方向之间的梯度
+            float f1 = 2.0f * (q1_ * q3_ - q0_ * q2_) - ax;
+            float f2 = 2.0f * (q0_ * q1_ + q2_ * q3_) - ay;
+            float f3 = 2.0f * (0.5f - q1_ * q1_ - q2_ * q2_) - az;
 
-            // 叉积误差
-            float ex = (ay * vz - az * vy);
-            float ey = (az * vx - ax * vz);
-            float ez = (ax * vy - ay * vx);
+            float s0 = -2.0f * q2_ * f1 + 2.0f * q1_ * f2;
+            float s1 =  2.0f * q3_ * f1 + 2.0f * q0_ * f2 - 4.0f * q1_ * f3;
+            float s2 = -2.0f * q0_ * f1 + 2.0f * q3_ * f2 - 4.0f * q2_ * f3;
+            float s3 =  2.0f * q1_ * f1 + 2.0f * q2_ * f2;
 
-            // 积分项（Ki）
-            if (ki_ > 0.0f) {
-                ex_int_ += ex * dt;
-                ey_int_ += ey * dt;
-                ez_int_ += ez * dt;
-                if (ex_int_ > integral_limit_) ex_int_ = integral_limit_;
-                if (ex_int_ < -integral_limit_) ex_int_ = -integral_limit_;
-                if (ey_int_ > integral_limit_) ey_int_ = integral_limit_;
-                if (ey_int_ < -integral_limit_) ey_int_ = -integral_limit_;
-                if (ez_int_ > integral_limit_) ez_int_ = integral_limit_;
-                if (ez_int_ < -integral_limit_) ez_int_ = -integral_limit_;
+            float norm_s = sqrtf(s0*s0 + s1*s1 + s2*s2 + s3*s3);
+            if (norm_s > 0.0f) {
+                float inv_s = 1.0f / norm_s;
+                s0 *= inv_s;
+                s1 *= inv_s;
+                s2 *= inv_s;
+                s3 *= inv_s;
 
-                gx_rad += 2.0f * ki_ * ex_int_;
-                gy_rad += 2.0f * ki_ * ey_int_;
-                gz_rad += 2.0f * ki_ * ez_int_;
-            } else {
-                ex_int_ = ey_int_ = ez_int_ = 0.0f;
+                qDot1 -= beta_ * s0;
+                qDot2 -= beta_ * s1;
+                qDot3 -= beta_ * s2;
+                qDot4 -= beta_ * s3;
             }
-
-            // 比例项（Kp）
-            gx_rad += 2.0f * kp_ * ex;
-            gy_rad += 2.0f * kp_ * ey;
-            gz_rad += 2.0f * kp_ * ez;
         }
-
-        // 四元数微分方程（角速度已补偿）
-        float qDot1 = 0.5f * (-q1_ * gx_rad - q2_ * gy_rad - q3_ * gz_rad);
-        float qDot2 = 0.5f * ( q0_ * gx_rad - q3_ * gy_rad + q2_ * gz_rad);
-        float qDot3 = 0.5f * ( q0_ * gy_rad + q3_ * gx_rad - q1_ * gz_rad);
-        float qDot4 = 0.5f * ( q0_ * gz_rad - q2_ * gx_rad + q1_ * gy_rad);
         
         q0_ += qDot1 * dt;
         q1_ += qDot2 * dt;
@@ -288,11 +272,11 @@ namespace mpu6500
         resetAttitude();
     }
     
-    void MPU6500::setMahonyGains(float kp, float ki, float integral_limit)
+    void MPU6500::setMadgwickBeta(float beta)
     {
-        this->kp_ = (kp >= 0.0f) ? kp : 0.0f;
-        this->ki_ = (ki >= 0.0f) ? ki : 0.0f;
-        this->integral_limit_ = (integral_limit > 0.0f) ? integral_limit : this->integral_limit_;
+        if (beta > 0.0f) {
+            beta_ = beta;
+        }
     }
     
     void MPU6500::resetAttitude(float pitch_deg, float roll_deg, float yaw_deg)
@@ -337,7 +321,6 @@ namespace mpu6500
         this->q2_ = cr * sp * cy + sr * cp * sy;
         this->q3_ = cr * cp * sy - sr * sp * cy;
         
-        this->ex_int_ = this-> ey_int_ = this->ez_int_ = 0.0f;
         normalizeQuaternion();
         
         // 计算欧拉角

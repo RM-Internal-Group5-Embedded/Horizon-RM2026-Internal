@@ -275,7 +275,9 @@ void updateClawTask(void *pvPara) {
   if (!motors_initialized) {
     vTaskDelay(pdMS_TO_TICKS(200)); // Wait for CAN to stabilize
     
-    // Enable DMJ4310 motor first
+    // Reset internal tracking in motor object so position starts at zero
+    dmj4310_motor_p->resetData();
+    // Enable DMJ4310 motor first (CAN ID = 1)
     dmj4310_motor_p->enableMotor();
     vTaskDelay(pdMS_TO_TICKS(100)); // Wait for motor to enable (LED should turn green)
     
@@ -283,9 +285,6 @@ void updateClawTask(void *pvPara) {
     dmj4310_motor_p->setZeroPosition();
     vTaskDelay(pdMS_TO_TICKS(50));
     
-    // Reset internal tracking in motor object so position starts at zero
-    dmj4310_motor_p->resetData();
-    dmj4310_motor_p->enableMotor();
     
     // Send initial zero commands to GM6020 and M3508 claw motors
     gm6020_motor_p->sendCurrent(0);
@@ -378,7 +377,7 @@ void mpuTask(void *pvPara) {
   // Kp=1.0: Faster response to accelerometer corrections
   // Ki=0.01: Integral term reduces long-term drift (critical for sustained movement)
   // Limit=1.0: Allows more integral correction for better accuracy
-  mpu.setMahonyGains(1.0f, 0.01f, 1.0f);
+  mpu.setMadgwickBeta(0.1f);
   mpu.resetAttitude();
   g_mpuReady = true;
   
