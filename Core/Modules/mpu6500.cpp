@@ -43,7 +43,9 @@ namespace mpu6500
         , ki_(0.0f)
         , last_dt_(0.001f)
         , integral_limit_(0.5f)
-
+        , gyro_x_(0.0f)
+        , gyro_y_(0.0f)
+        , gyro_z_(0.0f)
     {
         // 2000度/秒量程
         gyro_scale_ = 2000.0f / 32768.0f;
@@ -124,7 +126,10 @@ namespace mpu6500
     float gx = _gy;
     float gy = -_gz;
     float gz = -_gx;
-
+    
+    gyro_x_ = gx;
+    gyro_y_ = gy;
+    gyro_z_ = gz;
 
     const float deg2rad = 0.017453292519943295f;
     float gx_rad = gx * deg2rad;

@@ -129,11 +129,11 @@ int main(void)
   MX_SPI1_Init();
   MX_TIM2_Init();
   MX_TIM15_Init();
-  MX_TIM3_Init();
-  MX_TIM4_Init();
   MX_I2C2_Init();
   MX_USART2_UART_Init();
   MX_TIM17_Init();
+  MX_TIM3_Init();
+  MX_TIM4_Init();
   /* USER CODE BEGIN 2 */
   // Write the option bytes, !!DO NOT MODIFY!!
   FLASH_OBProgramInitTypeDef pOBInit;

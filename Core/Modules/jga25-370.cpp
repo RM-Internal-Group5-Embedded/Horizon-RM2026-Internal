@@ -60,7 +60,7 @@ namespace jgamotor
         // PWM范围 0-1000 映射到定时器ARR
         // 注意：PWM周期 = ARR + 1（从0数到ARR）
         uint32_t arr = __HAL_TIM_GET_AUTORELOAD(pwm_timer_);
-        uint32_t ccr = ((arr + 1) * _duty) / 1000;
+        uint32_t ccr = ((arr + 1) * _duty) / 1000 - 1;
         
         __HAL_TIM_SET_COMPARE(pwm_timer_, pwm_channel_, ccr);
     }

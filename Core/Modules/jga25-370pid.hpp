@@ -1,6 +1,5 @@
 #ifndef JGA25_370PID_HPP
 #define JGA25_370PID_HPP
-
 #include "jga25-370.hpp"
 #include "jga25-370-encoder.hpp"
 #include "mpu6500.hpp"
@@ -28,6 +27,8 @@ namespace arpid
         float last_derivative_;  // 用于D项低通滤波
         float out_min_, out_max_;
         float integral_min_, integral_max_;
+        float error;
+        float output;
     };
     
     // AR控制器
@@ -44,12 +45,13 @@ namespace arpid
         void setTargetVelocity(float velocity);
         void enable();
         void disable();
-        
         void setAnglePID(float kp, float ki, float kd);
-        void setVelocityPID(float kp, float ki, float kd);
+        void setVelocityPID(float kp, float ki, float kd, int8_t polarity);
         void setTargetAngleOffset(float angle);
-        void setAngleFeedforwardGain(float gain) { angle_feedforward_gain_ = gain; }
-        void setVelocityFeedforwardGain(float gain) { velocity_feedforward_gain_ = gain; }
+        // 偏航控制（在电机PID内做差速叠加）
+        void setYawPID(float kp, float ki, float kd);
+        void setYawTarget(float yaw_deg);
+        void setYawSign(int8_t sign); // 左轮+1，右轮-1（或相反，按接线调整）
         float getTargetAngleOffset() const { return target_angle_offset_; }
         float getCurrentAngle() const { return current_angle_; }
         float getCurrentVelocity() const { return current_velocity_; }
@@ -61,15 +63,24 @@ namespace arpid
         
         PID angle_pid_;
         PID velocity_pid_;
-        
+        PID yaw_pid_;
         bool enabled_;
         float target_velocity_;
         float current_angle_;
+        int8_t polarity_;
         float current_velocity_;
+        float current_yaw;
         float target_angle_offset_;
         float angle_feedforward_gain_;
         float velocity_feedforward_gain_;
-        
+        float yaw_target_deg_;
+        float yaw_correction_;
+        float velocity_cmd_;
+        int8_t yaw_sign_;
+        float target_angle;
+        float motor_output;
+        float avg_velocity; 
+        // （移除合并PID的全局同步机制）
         int16_t limitMotorOutput(float output);
     };
 

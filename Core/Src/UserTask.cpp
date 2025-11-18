@@ -100,14 +100,26 @@ void arTask(void *pvPara) {
   }
 
   // 自动启动AR控制
-  ar_left.setAnglePID(190, 30, 8);
-  ar_right.setAnglePID(80, 30, 8);
+  ar_left.setAnglePID(700 * 0.6, 0, 7 * 0.6);
+  ar_right.setAnglePID(700 * 0.6, 0, 7 * 0.6);
   ar_left.enable();
   ar_right.enable();
-  ar_left.setTargetAngleOffset(2.5f);
-  ar_right.setTargetAngleOffset(2.5f);
-  ar_left.setTargetVelocity(0.0f);   // 左电机原地平衡
-  ar_right.setTargetVelocity(0.0f);  // 右电机原地平衡
+  static volatile float p;
+  static volatile float i;
+  static volatile float d;
+  static volatile float velocity1;
+  static volatile float velocity2;
+  ar_left.setTargetAngleOffset(-3.0f);
+  ar_right.setTargetAngleOffset(-3.0f);
+  // 配置偏航PID（在电机PID内部执行差速），以及符号（左+1，右-1）
+  // ar_left.setYawPID(0.0f, 0.0f, 0.0f);
+  // ar_right.setYawPID(0.0f, 0.0f, 0.0f);
+  ar_left.setYawSign(+1);
+  ar_right.setYawSign(-1);
+  ar_left.setYawTarget(0.0f);
+  ar_right.setYawTarget(0.0f);
+  ar_left.setVelocityPID(0.05, 0.1, 0.00001, -1);
+  ar_right.setVelocityPID(0.05, 0.1, 0.00001, 1);
   // 控制周期
   const uint32_t UPDATE_PERIOD_MS = 1;  // 1ms = 1kHz（尽可能快）
   const float dt = UPDATE_PERIOD_MS / 1000.0f;
@@ -116,12 +128,13 @@ void arTask(void *pvPara) {
     // AR控制更新（双电机）
     ar_left.update(dt);
     ar_right.update(dt);
-    
+    ar_left.setTargetVelocity(velocity1);   // 基础速度由 yaw 修正叠加
+    ar_right.setTargetVelocity(velocity2);
+   
     // 延时
     vTaskDelay(pdMS_TO_TICKS(UPDATE_PERIOD_MS));
   }
 }
-
 // 编码器读取任务函数（双编码器）
 void encoderTask(void *pvPara) {
   // 初始化编码器
@@ -129,7 +142,7 @@ void encoderTask(void *pvPara) {
   encoder_right.init();
   
   // 更新周期（毫秒）
-  const uint32_t UPDATE_PERIOD_MS = 1;  
+  const uint32_t UPDATE_PERIOD_MS = 5;  
   
   while (true) {
     // 更新编码器数据（双电机）

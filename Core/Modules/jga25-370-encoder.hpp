@@ -11,7 +11,7 @@ namespace jgaencoder
     {
     public:
         // 构造函数
-        Jga25370Encoder(TIM_HandleTypeDef* _encoder_timer,
+        Jga25370Encoder(TIM_HandleTypeDef* _encoder_timer, 
                        float _wheel_diameter_mm,
                        uint16_t _encoder_ppr,
                        float _gear_ratio);
@@ -45,7 +45,7 @@ namespace jgaencoder
         
         // 重置所有累计值
         void reset();
-        
+
     private:
         TIM_HandleTypeDef* encoder_timer_;      // 编码器定时器
         float wheel_diameter_mm_;               // 轮子直径（mm）
@@ -58,7 +58,7 @@ namespace jgaencoder
         float speed_pps_;                       // 速度（脉冲/秒）
         float linear_velocity_mmps_;            // 线速度（mm/s）
         float angular_velocity_radps_;          // 角速度（rad/s）
-        
+        float last_linear_velocity_mmps_;
         // 处理计数器溢出
         int32_t handleOverflow(int32_t _current_count);
     };

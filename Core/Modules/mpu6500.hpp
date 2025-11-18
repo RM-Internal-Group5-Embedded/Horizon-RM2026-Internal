@@ -55,11 +55,11 @@ namespace mpu6500
                            float roll_deg = 0.0f,
                            float yaw_deg = 0.0f);
         
-        // 获取当前倾角
+        // 获取当前倾角/速度
         float getPitch() const { return pitch_; }
         float getRoll() const { return roll_; }
         float getYaw() const { return yaw_; }
-        
+        float getYawspeed() const {return gyro_z_;}
         // 重置yaw角（用于消除累积漂移）
         void resetYaw() { yaw_ = 0.0f; }
         
@@ -87,6 +87,12 @@ namespace mpu6500
         float last_dt_;
         float integral_limit_;
         
+        //角速度
+        float gyro_x_;
+        float gyro_y_;
+        float gyro_z_;
+
+
         void updateRotationMatrix();
         void clampDt(float& dt);
         void normalizeQuaternion();
