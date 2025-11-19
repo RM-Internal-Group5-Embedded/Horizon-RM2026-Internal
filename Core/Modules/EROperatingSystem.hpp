@@ -106,7 +106,7 @@ public:
 };
 
 enum class ClawState {
-    IDLE, CLASP, RELEASE
+    IDLE, CLASP, RELEASE, GETDOWN, MANUAL
 };
 
 enum class ArmState {
@@ -119,6 +119,26 @@ struct ClawMotors {
     M3508Functions* m3508_claw = nullptr;  // 5th M3508 motor for claw
 };
 
+struct MoveSequence {
+    bool active = false;
+    uint32_t starttime = 0;
+    uint32_t currenttime = 0;
+    uint16_t duration[6] = {2000, 2000, 500, 
+                            500, 500, 500};
+    float speed[6] = {500.0f, 500.0f, 500.0f, 
+                      500.0f, 500.0f, 500.0f};
+    bool progress[10] = {0}; // remember to change reset function when change size
+    float m3508_input = 0;
+    float dmj_input = 0;
+    float gm6020_input = 0;
+
+    float m3508_startdeg = 0.0f;
+    float dmj_startdeg = 0.0f;
+    float gm6020_startdeg = 0.0f;
+};
+
+
+
 // Separate control system for claw motors
 class ERClawControl {
 private:
@@ -128,10 +148,14 @@ private:
     
 public:
     
-    
+     MoveSequence get_down;
+     MoveSequence release_up;
+     MoveSequence release_down;
+
     ClawMotors claw_motors;
-        ClawState current_state = ClawState::IDLE;
-        ArmState arm_state = ArmState::IDLE;
+
+    ClawState current_state = ClawState::IDLE;
+    ArmState arm_state = ArmState::IDLE;
     
     ERClawControl(DMJ4310Functions& base_motor, GM6020Functions& small_motor);
     
@@ -142,20 +166,36 @@ public:
     void idleMode();
     
     void claspMode(const uartdriver::ReceivedValue& received_data);
+
+    void sendClawCurrent(float gm6020degree, float motor_position, float m3508_angle, float dt);
+
+    void resetMoveSequence(MoveSequence &target);
+
+    void captureStartDegrees(MoveSequence &sequence, uint8_t phase_index);
+
+    void moveMotor_gm6020(float starting, uint16_t target, float progress, float dt);
+    void moveMotor_m3508(float starting, uint16_t target, float progress, float dt);
+    void moveMotor_dmj(float starting, uint16_t target, float progress, float dt);
+
+
+
+    void getDownSequence();
+
+    void releaseDownSequence();
+
+    void releaseUpSequence();
     
     void releaseMode(const uartdriver::ReceivedValue& received_data);
 
     void upMode(const uartdriver::ReceivedValue& received_data);
 
     void downMode(const uartdriver::ReceivedValue& received_data);
+
+    void fullManualClaw(const uartdriver::ReceivedValue& received_data);
     
-    void setState(ClawState state) {
-        current_state = state;
-    }
+    void setState(ClawState state) { current_state = state; }
     
-    ClawState getState() const {
-        return current_state;
-    }
+    ClawState getState() const { return current_state; }
     
     // Update claw motors based on state
     void update(const uartdriver::ReceivedValue& received_data);

@@ -389,6 +389,227 @@ void ERClawControl::idleMode() {
     }
 }
 
+void ERClawControl::fullManualClaw(const uartdriver::ReceivedValue& received_data){
+    resetMoveSequence(release_up);
+    resetMoveSequence(release_down);
+    resetMoveSequence(get_down);
+    static uint32_t last_time = 0;
+    float dt = computeDeltaTime(last_time);
+    int16_t gm6020_current = 0;
+    float gm6020degree = 180*(static_cast<float>(received_data.channel_6) - CENTER) / SBUS_SPAN;
+    float m3508_angle = 360*(static_cast<float>(received_data.channel_3) - CENTER) / SBUS_SPAN;
+    float motor_position = 8*(static_cast<float>(received_data.channel_5) - CENTER) / SBUS_SPAN;
+    
+    sendClawCurrent(gm6020degree, motor_position, m3508_angle, dt);
+}
+
+void ERClawControl::sendClawCurrent(float gm6020degree, float motor_position, float m3508_angle, float dt){
+    if (claw_motors.small_claw) {
+        // Use PID to reach 720 degrees (2 full rotations)
+        claw_motors.small_claw->setAnglePID(gm6020degree, dt, true);
+    }
+    // DMJ4310 base claw control - RELEASE MODE: go to 0° (top shaft angle)
+    if (claw_motors.base_claw) {
+        // Ensure motor is enabled before sending commands
+        static uint32_t last_enable_time = 0;
+        uint32_t current_time = HAL_GetTick();
+        // Send enable command periodically (every 100ms) to keep motor enabled
+        if (current_time - last_enable_time >= 100) {
+            claw_motors.base_claw->enableMotor();
+            last_enable_time = current_time;
+        }
+        // MIT command: position=12.566 rad, velocity=0, kp=50, kd=2, torque=0
+        claw_motors.base_claw->sendMITCommand(motor_position, 0.01f, 
+                                claw_motors.base_claw->RPM_KP, 
+                                claw_motors.base_claw->RPM_KD, 
+                                claw_motors.base_claw->RPM_KI);
+    }
+
+    if (claw_motors.m3508_claw) {
+        claw_motors.m3508_claw->setAnglePID(m3508_angle, dt, true);
+    }
+}
+
+void ERClawControl::resetMoveSequence(MoveSequence &target){
+    target.active = false;
+    target.starttime = 0;
+    target.currenttime = 0;
+    target.m3508_input = 0;
+    target.dmj_input = 0;
+    target.gm6020_input = 0;
+    for(int i = 0; i < 10; i++){
+        target.progress[i] = false;
+    }
+}
+
+void ERClawControl::captureStartDegrees(MoveSequence &sequence, uint8_t phase_index){
+    if(sequence.progress[phase_index] == false){
+        sequence.progress[phase_index] = true;
+        if(claw_motors.m3508_claw){
+            sequence.m3508_startdeg = claw_motors.m3508_claw->motor_feedback.top_shaft_angle;
+        }
+        if(claw_motors.small_claw){
+            sequence.gm6020_startdeg = claw_motors.small_claw->motor_feedback.top_shaft_angle;
+        }
+        if(claw_motors.base_claw){
+            sequence.dmj_startdeg = claw_motors.base_claw->motor_feedback.top_shaft_angle;
+        }
+    }
+}
+
+void ERClawControl::moveMotor_gm6020(   float starting_degree, 
+                                        uint16_t target, float progress, float dt){
+    int16_t starting = (starting_degree / 180.0f) * SBUS_SPAN + CENTER;
+    float gm6020degree = 
+    180*(static_cast<float>(starting + (target - starting)*progress) - CENTER) / SBUS_SPAN;
+    
+    if (claw_motors.small_claw) {
+        claw_motors.small_claw->setAnglePID(gm6020degree, dt, true);
+    }
+}
+
+void ERClawControl::moveMotor_m3508(float starting_degree, 
+                                    uint16_t target, float progress, float dt){
+    int16_t starting = (starting_degree / 360.0f) * SBUS_SPAN + CENTER;
+    float m3508_angle = 
+    360*(static_cast<float>(starting + (target - starting)*progress) - CENTER) / SBUS_SPAN;
+    
+    
+    if (claw_motors.m3508_claw) {
+        claw_motors.m3508_claw->setAnglePID(m3508_angle, dt, true);
+    }
+}
+
+void ERClawControl::moveMotor_dmj(  float starting_degree, 
+                                    uint16_t target, float progress, float dt){
+    int16_t starting = (starting_degree / 100.0f) * SBUS_SPAN + CENTER;
+    float motor_position = 
+    8*(static_cast<float>(starting + (target - starting)*progress) - CENTER) / SBUS_SPAN;
+    
+     
+    if (claw_motors.base_claw) {
+        // Ensure motor is enabled before sending commands
+        static uint32_t last_enable_time = 0;
+        uint32_t current_time = HAL_GetTick();
+        // Send enable command periodically (every 100ms) to keep motor enabled
+        if (current_time - last_enable_time >= 100) {
+            claw_motors.base_claw->enableMotor();
+            last_enable_time = current_time;
+        }
+        // MIT command: position=12.566 rad, velocity=0, kp=50, kd=2, torque=0
+        claw_motors.base_claw->sendMITCommand(motor_position, 0.01f, 
+                                claw_motors.base_claw->RPM_KP, 
+                                claw_motors.base_claw->RPM_KD, 
+                                claw_motors.base_claw->RPM_KI);
+    }
+}
+
+
+void ERClawControl::getDownSequence(){
+    static uint32_t last_time = 0;
+    float dt = computeDeltaTime(last_time);
+    float progress = 0;
+
+    if(!get_down.active){
+        // Reset other sequences when starting this one
+        resetMoveSequence(release_up);
+        resetMoveSequence(release_down);
+        resetMoveSequence(get_down);
+        // Initialize this sequence
+        get_down.active = true;
+        get_down.starttime = xTaskGetTickCount();
+    }
+    // Update current time every cycle (always update, regardless of active state)
+    get_down.currenttime = xTaskGetTickCount();
+    // FIX: Use uint32_t to prevent overflow (uint16_t overflows after ~65 seconds)
+    uint32_t duration = get_down.currenttime - get_down.starttime;
+    
+    // Sequence:
+    // Phase 0 extend all
+    // Phase 1 lower down
+    // Phase 2 clasp
+    
+    if(duration < get_down.duration[0]){
+        progress = static_cast<float>(duration) / get_down.duration[0];
+        if(progress > 1.0f) progress = 1.0f;
+        if(progress < 0.0f) progress = 0.0f;
+        
+        captureStartDegrees(get_down, 0);
+
+        moveMotor_m3508(get_down.m3508_startdeg, 1800, progress, dt);
+        moveMotor_gm6020(get_down.gm6020_startdeg, 550, progress, dt);
+        moveMotor_dmj(get_down.dmj_startdeg, 1024, progress, dt);
+        //calculate motor movement
+        
+    } else if(duration < (get_down.duration[1] + get_down.duration[0])){
+        
+        progress = static_cast<float>(duration - get_down.duration[0]) 
+                    / get_down.duration[1];
+        if(progress > 1.0f) progress = 1.0f;
+        if(progress < 0.0f) progress = 0.0f;
+        captureStartDegrees(get_down, 1);
+        moveMotor_m3508(get_down.m3508_startdeg, 1800, progress, dt);
+        moveMotor_gm6020(get_down.gm6020_startdeg, 550, progress, dt);
+        moveMotor_dmj(get_down.dmj_startdeg, 1600, progress, dt);
+    } else if(duration < (get_down.duration[2] + get_down.duration[1] + get_down.duration[0])){
+        progress = static_cast<float>(duration - get_down.duration[0] - get_down.duration[1]) 
+                    / get_down.duration[2];
+        if(progress > 1.0f) progress = 1.0f;
+        if(progress < 0.0f) progress = 0.0f;
+        captureStartDegrees(get_down, 2);
+        moveMotor_m3508(get_down.m3508_startdeg, 1800, progress, dt);
+        moveMotor_gm6020(get_down.gm6020_startdeg, 1500, progress, dt);
+        moveMotor_dmj(get_down.dmj_startdeg, 1600, progress, dt);
+    } else if(duration < (get_down.duration[3] + get_down.duration[2] + get_down.duration[1] + get_down.duration[0])){
+        progress = static_cast<float>(duration - get_down.duration[0] - get_down.duration[1] - get_down.duration[2]) 
+                    / get_down.duration[2];
+        if(progress > 1.0f) progress = 1.0f;
+        if(progress < 0.0f) progress = 0.0f;
+        captureStartDegrees(get_down, 3);
+        moveMotor_m3508(get_down.m3508_startdeg, 1800, progress, dt);
+        moveMotor_gm6020(get_down.gm6020_startdeg, 1500, progress, dt);
+        moveMotor_dmj(get_down.dmj_startdeg, 770, progress, dt);
+    } else {
+        progress = 1;
+        moveMotor_m3508(get_down.m3508_startdeg, 1800, progress, dt);
+        moveMotor_gm6020(get_down.gm6020_startdeg, 1500, progress, dt);
+        moveMotor_dmj(get_down.dmj_startdeg, 770, progress, dt);
+    }
+
+    
+    //gm6020 to zero
+    //dmj to 0 deg, 947(without), 528(with)
+    //sm3508 to 0 deg (1800) max
+
+}
+
+void ERClawControl::releaseDownSequence(){
+    resetMoveSequence(release_up);
+    resetMoveSequence(get_down);
+    if(!release_down.active){
+        release_down.active = true;
+        release_down.starttime = HAL_GetTick();
+        
+    }
+
+}
+
+void ERClawControl::releaseUpSequence(){
+    resetMoveSequence(release_down);
+    resetMoveSequence(get_down);
+    if(!release_down.active){
+        release_down.active = true;
+        release_down.starttime = xTaskGetTickCount();
+        
+
+    }
+
+
+}
+
+
+
+
 void ERClawControl::claspMode(const uartdriver::ReceivedValue& received_data) {
     static uint32_t last_time = 0;
     float dt = computeDeltaTime(last_time);
@@ -489,18 +710,24 @@ void ERClawControl::switchState(const uartdriver::ReceivedValue& received_data) 
     if(received_data.channel_10 <= 1024) {
         current_state = ClawState::IDLE;
     } else {
+        if(received_data.channel_7 < 500){
+            current_state = ClawState::MANUAL;
+        } else {
+            current_state = ClawState::GETDOWN;
+        }
+        
         // channel_10 > 1024: Active mode - process commands
-        if (received_data.channel_7 < 500) {
-            current_state = ClawState::CLASP;
-        } else {
-            current_state = ClawState::RELEASE;
-        }
+        // if (received_data.channel_7 < 500) {
+        //     current_state = ClawState::CLASP;
+        // } else {
+        //     current_state = ClawState::RELEASE;
+        // }
 
-        if (received_data.channel_8 < 500) {
-            arm_state = ArmState::DOWN;
-        } else {
-            arm_state = ArmState::UP;
-        }
+        // if (received_data.channel_8 < 500) {
+        //     arm_state = ArmState::DOWN;
+        // } else {
+        //     arm_state = ArmState::UP;
+        // }
     }
     
     // Enable DMJ4310 motor when transitioning from IDLE to any active state
@@ -524,24 +751,31 @@ void ERClawControl::update(const uartdriver::ReceivedValue& received_data) {
         case ClawState::RELEASE:
             releaseMode(received_data);
             break;
+        case ClawState::GETDOWN:
+            getDownSequence();
+            break;
+        case ClawState::MANUAL:
+            fullManualClaw(received_data);
+            break;
         default:
             idleMode();
             break;
+
     }
-    if(current_state!= ClawState::IDLE)
-    switch (arm_state) {
-        case ArmState::UP:
-            //claw_motors.base_claw->enableMotor();
-            upMode(received_data);
-            break;
-        case ArmState::DOWN:
-            //claw_motors.base_claw->enableMotor();
-            downMode(received_data);
-            break;
-    }
-    else {
+    // if(current_state!= ClawState::IDLE)
+    // switch (arm_state) {
+    //     case ArmState::UP:
+    //         //claw_motors.base_claw->enableMotor();
+    //         upMode(received_data);
+    //         break;
+    //     case ArmState::DOWN:
+    //         //claw_motors.base_claw->enableMotor();
+    //         downMode(received_data);
+    //         break;
+    // }
+    // else {
         
-    }
+    // }
     //counter = 0;
 }
 
