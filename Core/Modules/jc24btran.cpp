@@ -247,7 +247,7 @@ uint16_t DataTransceiver::getReconnectCount() const {
 
 // DMA接收回调
 void DataTransceiver::RxEventCallback(UART_HandleTypeDef* huart, uint16_t size) {
-    HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_12);  // PA1闪烁表示进入回调，仅作指示
+    // GPIO indicator on PB12 removed (pin used by other hardware).
     
     if (huart_ != nullptr && huart == huart_) {
         // 检查接收长度
@@ -264,19 +264,14 @@ void DataTransceiver::RxEventCallback(UART_HandleTypeDef* huart, uint16_t size) 
         
         // 验证数据
         if (validateData(temp_data)) {
-            HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_SET);
-            
-            // 数据有效，更新接收数据
+            // Data valid — update state and refresh watchdog. LED indicator removed.
             memcpy(&rx_data_, &temp_data, sizeof(user_data));
             updateDebouncedPositions(rx_data_);
-            
-            // 刷新看门狗
             refreshWatchdog();
-            
+
             // 发送确认包
             send_ack(0x00);  // 状态0表示正常
-            
-            // 重连成功，清零计数
+
             if (reconnect_count_ > 0) {
                 reconnect_count_ = 0;
             }

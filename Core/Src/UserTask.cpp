@@ -30,12 +30,8 @@ void transceiverTask(void *pvPara) {
   // 初始化 DataTransceiver（使用 USART2）
   g_transceiver.init(&huart2);
   
-  for(int i = 0; i < 3; i++) {
-    HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);
-    vTaskDelay(pdMS_TO_TICKS(200));
-    HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
-    vTaskDelay(pdMS_TO_TICKS(200));
-  }
+  // Initial LED indicator removed: PB12/PB13 used by other hardware on the board.
+  vTaskDelay(pdMS_TO_TICKS(600));
   
   bool positions[4] = {0};
   uint32_t loop_count = 0;
@@ -50,18 +46,10 @@ void transceiverTask(void *pvPara) {
     g_transceiver.process();
     
     if (g_transceiver.getPositions(positions)) {
-      HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);
-      
-      if (positions[0] == 1) {
-        HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_SET);
-      } else {
-        HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_RESET);
-      }
-      
+      // LEDs removed; application may react to positions here instead.
+      (void)positions; // keep variable used
     } else {
-      HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
-      HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_RESET);
-      
+      // No positions / invalid data — implement safety actions here if needed.
       // 发送停止电机以确保安全
     }
     
