@@ -22,6 +22,10 @@ namespace jgaencoder
         // 更新编码器数据（需要周期调用，_dt_ms为距离上次调用的时间间隔，单位ms）
         void update(uint32_t _dt_ms);
         
+        // 使用卡尔曼滤波更新编码器数据（融合加速度计数据）
+        // _dt_ms: 时间间隔(ms), _accel_x: 加速度计X轴数据(m/s²)
+        void updateWithKalman(uint32_t _dt_ms, float _accel_x);
+        
         // 获取当前计数值
         int32_t getCount() const;
         
@@ -34,8 +38,11 @@ namespace jgaencoder
         // 获取线速度（mm/s）
         float getLinearVelocity() const;
         
-        // 获取角速度（rad/s）
+        // 获取角速度（rad/s）- 原始值
         float getAngularVelocity() const;
+        
+        // 获取滤波后的线速度（mm/s）- 卡尔曼滤波结果
+        float getFilteredLinearVelocity() const;
         
         // 获取累计行驶距离（mm）
         float getDistance() const;
@@ -59,8 +66,20 @@ namespace jgaencoder
         float linear_velocity_mmps_;            // 线速度（mm/s）
         float angular_velocity_radps_;          // 角速度（rad/s）
         float last_linear_velocity_mmps_;
+        
+        // 卡尔曼滤波状态
+        float kalman_linear_velocity_;          // 滤波后的线速度估计（mm/s）
+        float kalman_p_;                        // 估计误差协方差
+        float kalman_q_;                        // 过程噪声协方差
+        float kalman_r_;                        // 测量噪声协方差
+        
         // 处理计数器溢出
         int32_t handleOverflow(int32_t _current_count);
+        
+        // 卡尔曼滤波更新
+        void kalmanUpdate(float measurement, float dt);
+        void kalmanUpdate(float measurement, float dt, float q);  // 带自适应过程噪声的版本
+        void kalmanUpdateWithPrediction(float measurement, float dt, float q, float r, float predicted);  // 带预测和自适应噪声的版本
     };
 }
 

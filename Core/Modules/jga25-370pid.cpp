@@ -117,12 +117,12 @@ namespace arpid
 
         // 读取传感器
         current_angle_ = -mpu_->getPitch();
-        current_velocity_ = encoder_left.getLinearVelocity();
-        current_yaw = mpu_->getYaw();
+        current_velocity_ = polarity_ * encoder_->getFilteredLinearVelocity();
+        // current_yaw = mpu_->getYaw();
         
-        //转向环（外外环）
-        yaw_correction_ = yaw_pid_.compute(yaw_target_deg_, current_yaw, dt);
-        velocity_cmd_ = target_velocity_- yaw_sign_ * yaw_correction_;
+        // //转向环（外外环）
+        // yaw_correction_ = yaw_pid_.compute(yaw_target_deg_, current_yaw, dt);
+        // velocity_cmd_ = target_velocity_- yaw_sign_ * yaw_correction_;
 
         // 速度环（外环）
         target_angle = velocity_pid_.compute(velocity_cmd_, current_velocity_, dt);

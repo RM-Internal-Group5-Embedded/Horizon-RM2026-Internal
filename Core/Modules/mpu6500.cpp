@@ -130,6 +130,10 @@ namespace mpu6500
     gyro_x_ = gx;
     gyro_y_ = gy;
     gyro_z_ = gz;
+    
+    accel_x_ = ax;
+    accel_y_ = ay;
+    accel_z_ = az;
 
     const float deg2rad = 0.017453292519943295f;
     float gx_rad = gx * deg2rad;

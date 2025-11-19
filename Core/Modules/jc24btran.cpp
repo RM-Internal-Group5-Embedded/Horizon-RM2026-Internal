@@ -264,7 +264,7 @@ void DataTransceiver::RxEventCallback(UART_HandleTypeDef* huart, uint16_t size) 
         
         // 验证数据
         if (validateData(temp_data)) {
-            HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_SET);
+            // HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_SET);
             
             // 数据有效，更新接收数据
             memcpy(&rx_data_, &temp_data, sizeof(user_data));

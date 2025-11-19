@@ -60,6 +60,10 @@ namespace mpu6500
         float getRoll() const { return roll_; }
         float getYaw() const { return yaw_; }
         float getYawspeed() const {return gyro_z_;}
+        float getPitchspeed() const {return gyro_y_;}  // 获取pitch轴角速度（度/秒）
+        float getRollspeed() const {return gyro_x_;}   // 获取roll轴角速度（度/秒）
+        float getAccelY() const {return accel_y_;}     // 获取加速度计Y轴数据（m/s²）
+        float getAccelX() const {return accel_x_;}     // 获取加速度计X轴数据（m/s²）
         // 重置yaw角（用于消除累积漂移）
         void resetYaw() { yaw_ = 0.0f; }
         
@@ -91,6 +95,11 @@ namespace mpu6500
         float gyro_x_;
         float gyro_y_;
         float gyro_z_;
+        
+        //加速度计
+        float accel_x_;
+        float accel_y_;
+        float accel_z_;
 
 
         void updateRotationMatrix();

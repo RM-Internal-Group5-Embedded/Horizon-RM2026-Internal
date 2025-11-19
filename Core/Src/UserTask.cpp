@@ -86,6 +86,14 @@ StaticTask_t xMpuTaskTCB;
 
 StackType_t  uxMgTaskStack[configMINIMAL_STACK_SIZE * 3]; // 384字节栈
 StaticTask_t xMgTaskTCB;
+
+StackType_t  uxMoveTaskStack[configMINIMAL_STACK_SIZE * 4]; // 512字节栈
+StaticTask_t xMoveTaskTCB;
+
+// // Transceiver任务栈 - 用于JC24B数据收发
+// StackType_t uxTransceiverTaskStack[configMINIMAL_STACK_SIZE * 4];  // 512字节栈
+// StaticTask_t xTransceiverTaskTCB;
+
 // PWM控制任务栈
 // StackType_t uxPWMTaskStack[configMINIMAL_STACK_SIZE * 2];  // 256字节栈
 // StaticTask_t xPWMTaskTCB;
@@ -134,65 +142,17 @@ void arTask(void *pvPara) {
     // AR控制更新（双电机）
     ar_left.update(dt);
     ar_right.update(dt);
+    // ar_left.setVelocityPID(p, i, d, 1);
+    // ar_right.setVelocityPID(p, i, d, -1);
     ar_left.setTargetVelocity(velocity1);   // 基础速度由 yaw 修正叠加
     ar_right.setTargetVelocity(velocity2);
+
    
     // 延时
     vTaskDelay(pdMS_TO_TICKS(UPDATE_PERIOD_MS));
-
-// JC24B 数据收发实例
-jc24b::DataTransceiver g_transceiver;
-
-
-// Transceiver任务栈 - 用于JC24B数据收发
-StackType_t uxTransceiverTaskStack[configMINIMAL_STACK_SIZE * 4];  // 512字节栈
-StaticTask_t xTransceiverTaskTCB;
-
-
-// Transceiver任务函数 - 负责JC24B数据收发和连接管理
-void transceiverTask(void *pvPara) {
-  // 初始化 DataTransceiver（使用 USART2）
-  g_transceiver.init(&huart2);
-  
-  for(int i = 0; i < 3; i++) {
-    // HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);
-    // vTaskDelay(pdMS_TO_TICKS(200));
-    // HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
-    // vTaskDelay(pdMS_TO_TICKS(200));
-  }
-  
-  bool positions[4] = {0};
-  uint32_t loop_count = 0;
-  
-  while (true) {
-    loop_count++;
-    // if (loop_count % 20 == 0) {  // 50ms * 20 = 1秒
-    //  HAL_GPIO_TogglePin(LED0_GPIO_Port, LED0_Pin);
-    // }
-    
-    // // 主循环处理（检查看门狗超时）
-    // g_transceiver.process();
-    
-    // if (g_transceiver.getPositions(positions)) {
-    //   HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);
-      
-    //   if (positions[0] == 1) {
-    //     HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_SET);
-    //   } else {
-    //     HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_RESET);
-    //   }
-      
-    // } else {
-    //   HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
-    //   HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_RESET);
-      
-    //   // 发送停止电机以确保安全
-    // }
-    
-    vTaskDelay(pdMS_TO_TICKS(50));  // 50ms延时
   }
 }
-// 编码器读取任务函数（双编码器）
+// 编码器读取任务函数（双编码器，使用卡尔曼滤波融合陀螺仪数据）
 void encoderTask(void *pvPara) {
   // 初始化编码器
   encoder_left.init();
@@ -202,9 +162,12 @@ void encoderTask(void *pvPara) {
   const uint32_t UPDATE_PERIOD_MS = 5;  
   
   while (true) {
-    // 更新编码器数据（双电机）
-    encoder_left.update(UPDATE_PERIOD_MS);
-    encoder_right.update(UPDATE_PERIOD_MS);
+    // 获取加速度计X轴数据（m/s²）
+    float accel_x = mpu.getAccelX();
+    
+    // 使用卡尔曼滤波更新编码器数据（融合加速度计X轴数据）
+    encoder_left.updateWithKalman(UPDATE_PERIOD_MS, accel_x);
+    encoder_right.updateWithKalman(UPDATE_PERIOD_MS, accel_x);
     
     // 延时
     vTaskDelay(pdMS_TO_TICKS(UPDATE_PERIOD_MS));
@@ -261,6 +224,62 @@ void mgTask(void *pvPara){
 
 
 }
+void MoveTask(void *pvPara)
+{
+  bool position[4] = {};
+  bool receivestatus;
+  int8_t i = -1;
+  int8_t angle_flag = 0;
+  int sensor = 0;//侧面传感器值
+  int startposition = 0; //起始点信号
+  servo.first_angle();
+  while(1)
+  {
+    receivestatus =  g_transceiver.getPositions(position);
+    if (startposition)
+    {
+      ar_left.setTargetVelocity(50);
+      ar_right.setTargetVelocity(50);
+    }
+    //在这里加巡线逻辑，然后把侧边sensor优先级加到最大，其次才是巡线
+      if (sensor && !startposition)
+      {
+        ar_left.setTargetVelocity(0);
+        ar_right.setTargetVelocity(0);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        if (sensor && !startposition)
+        {
+          i++;
+          if (position[i])
+          {
+            if(angle_flag == 0)
+            {
+              servo.second_angle();
+              vTaskDelay(pdMS_TO_TICKS(2000));
+              angle_flag = 1;
+            }
+            if(angle_flag == 1)
+            {
+              servo.third_angle();
+              vTaskDelay(pdMS_TO_TICKS(500));
+              servo.first_angle();
+              vTaskDelay(pdMS_TO_TICKS(2000));
+              angle_flag = 2;
+            }
+            if (angle_flag == 2)
+            {
+              ar_left.setTargetVelocity(-50);
+              ar_right.setTargetVelocity(-50);
+              angle_flag = 0;
+            }
+
+          }
+        }
+        ar_left.setTargetVelocity(50);
+        ar_right.setTargetVelocity(50);
+      }
+    }
+}
 // 手动PWM控制任务函数（已禁用，如需测试可取消注释）
 // void pwmTask(void *pvPara) {
 //   // 初始化电机
@@ -295,33 +314,29 @@ void mgTask(void *pvPara){
 //     vTaskDelay(pdMS_TO_TICKS(UPDATE_PERIOD_MS));
 //   }
 // }
-    loop_count++;
-    if (loop_count % 20 == 0) {  // 50ms * 20 = 1秒
-     HAL_GPIO_TogglePin(LED0_GPIO_Port, LED0_Pin);
-    }
+
+// Transceiver任务函数 - 负责JC24B数据收发和连接管理
+// void transceiverTask(void *pvPara) {
+//   // 初始化 DataTransceiver（使用 USART2）
+//   g_transceiver.init(&huart2);
+  
+//   bool positions[4] = {0};
+//   uint32_t loop_count = 0;
+  
+//   while (true) {
+//     loop_count++;
     
-    // 主循环处理（检查看门狗超时）
-    g_transceiver.process();
+//     // 主循环处理（检查看门狗超时）
+//     g_transceiver.process();
     
-    if (g_transceiver.getPositions(positions)) {
-      HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);
-      
-      if (positions[0] == 1) {
-        HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_SET);
-      } else {
-        HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_RESET);
-      }
-      
-    } else {
-      HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
-      HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_RESET);
-      
-      // 发送停止电机以确保安全
-    }
+//     // 获取位置数据（如果需要可以在这里处理）
+//     // if (g_transceiver.getPositions(positions)) {
+//     //   // 处理位置数据
+//     // }
     
-    vTaskDelay(pdMS_TO_TICKS(50));  // 50ms延时
-  }
-}
+//     vTaskDelay(pdMS_TO_TICKS(50));  // 50ms延时
+//   }
+// }
 
 /**
  * @brief Intialize all the drivers and add task to the scheduler
@@ -333,7 +348,7 @@ void startUserTasks() {
                     uxMpuTaskStack, &xMpuTaskTCB);
   
   // 创建AR控制任务 - 优先级10（次高，平衡控制）
-  xTaskCreateStatic(arTask, "AR_Task", configMINIMAL_STACK_SIZE * 3, NULL, 10,
+  xTaskCreateStatic(arTask, "AR_Task", configMINIMAL_STACK_SIZE * 3, NULL, 12,
                     uxARTaskStack, &xARTaskTCB);
   
   // 创建编码器读取任务 - 优先级8（较高，速度反馈）
@@ -342,21 +357,13 @@ void startUserTasks() {
   
   xTaskCreateStatic(mgTask, "MG_Task", configMINIMAL_STACK_SIZE * 3, NULL, 11,
                     uxMgTaskStack, &xMgTaskTCB);
-                    // 如果需要手动PWM控制（用于测试），取消注释下面的任务
-  // xTaskCreateStatic(pwmTask, "PWM_Task", configMINIMAL_STACK_SIZE * 2, NULL, 3,
-  //                   uxPWMTaskStack, &xPWMTaskTCB);
-  
-  // 创建编码器读取任务 - 优先级8（较高，速度反馈）
-  xTaskCreateStatic(encoderTask, "Encoder_Task", configMINIMAL_STACK_SIZE * 3, NULL, 8,
-                    uxEncoderTaskStack, &xEncoderTaskTCB);
-  
-  xTaskCreateStatic(mgTask, "MG_Task", configMINIMAL_STACK_SIZE * 3, NULL, 11,
-                    uxMgTaskStack, &xMgTaskTCB);
-                    // 如果需要手动PWM控制（用于测试），取消注释下面的任务
+  xTaskCreateStatic(mgTask, "MoveTask", configMINIMAL_STACK_SIZE * 3, NULL, 11,
+                    uxMoveTaskStack, &xMoveTaskTCB);
+  // 如果需要手动PWM控制（用于测试），取消注释下面的任务
   // xTaskCreateStatic(pwmTask, "PWM_Task", configMINIMAL_STACK_SIZE * 2, NULL, 3,
   //                   uxPWMTaskStack, &xPWMTaskTCB);
   
   // 创建Transceiver任务 - 中高优先级，负责JC24B数据收发和连接管理
-  xTaskCreateStatic(transceiverTask, "Transceiver_Task", configMINIMAL_STACK_SIZE * 4, NULL, 4,
-                    uxTransceiverTaskStack, &xTransceiverTaskTCB);
-verTaskTCB);
+  // xTaskCreateStatic(transceiverTask, "Transceiver_Task", configMINIMAL_STACK_SIZE * 4, NULL, 4,
+  //                   uxTransceiverTaskStack, &xTransceiverTaskTCB);
+}
