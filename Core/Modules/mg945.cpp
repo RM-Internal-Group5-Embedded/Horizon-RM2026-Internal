@@ -43,18 +43,19 @@ namespace mg
     {
         set_angle(third_angle_);
     }
+    
 
-    // 角度 → CCR 值 (ARR=19999, 20ms 周期)
+    // 角度 → CCR 值
     uint32_t mg945::angle_to_ccr(uint32_t angle)
     {
         // 限制角度
-    if (angle < 0) angle = 0;
-    if (angle > 180) angle = 180;
+        if (angle < 0) angle = 0;
+        if (angle > 180) angle = 180;
 
-    // 0° → 0.5ms = 500us
-    // 180°→ 2.5ms = 2500us
-    float pulse_us = 500.0f + (angle / 180.0f) * 2000.0f;
-    return pulse_us;
+        // 0° → 0.5ms = 500us
+        // 180°→ 2.5ms = 2500us
+        float pulse_us = 500.0f + (angle / 180.0f) * 2000.0f;
+        return pulse_us;
     }
 
 } // namespace mg

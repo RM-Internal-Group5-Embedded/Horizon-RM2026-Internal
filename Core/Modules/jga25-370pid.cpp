@@ -105,6 +105,7 @@ namespace arpid
     void AR::init()
     {
         enabled_ = false;
+
     }
 
     void AR::update(float dt)
@@ -117,7 +118,7 @@ namespace arpid
 
         // 读取传感器
         current_angle_ = -mpu_->getPitch();
-        current_velocity_ = polarity_ * encoder_->getFilteredLinearVelocity();
+        current_velocity_ = (encoder_left.getLinearVelocity() - encoder_right.getLinearVelocity()) / 2;
         // current_yaw = mpu_->getYaw();
         
         // //转向环（外外环）
@@ -125,7 +126,7 @@ namespace arpid
         // velocity_cmd_ = target_velocity_- yaw_sign_ * yaw_correction_;
 
         // 速度环（外环）
-        target_angle = velocity_pid_.compute(velocity_cmd_, current_velocity_, dt);
+        target_angle = velocity_pid_.compute(target_velocity_, current_velocity_, dt);
 
         // 角度环（内环)
         motor_output = angle_pid_.compute(target_angle - target_angle_offset_, current_angle_, dt);

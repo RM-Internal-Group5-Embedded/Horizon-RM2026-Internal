@@ -219,10 +219,10 @@ bool DataTransceiver::send_ack(uint8_t status) {
 }
 
 // 获取位置数据（安全接口）
-bool DataTransceiver::getPositions(bool positions[4]) {
+bool DataTransceiver::getPositions(bool (&positions)[4]) {
     if (!connected_ || !data_valid_) {
         // 数据无效，清零输出
-        memset(positions, 0, 4);
+        memset(positions, 0, sizeof(positions));
         return false;
     }
     

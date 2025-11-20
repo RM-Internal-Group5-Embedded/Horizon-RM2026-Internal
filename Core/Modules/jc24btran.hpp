@@ -75,7 +75,7 @@ public:
     bool send_ack(uint8_t status = 0);
     
     // 外部接口 - 获取位置数据（安全接口）
-    bool getPositions(bool positions[4]);  // 返回false表示数据无效
+    bool getPositions(bool (&positions)[4]);  // 返回false表示数据无效
     
     // 连接状态查询
     bool isConnected() const;

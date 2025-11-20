@@ -60,8 +60,8 @@ namespace jgaencoder
         // 公式：线速度 = (脉冲数 / 每转脉冲数) × π × 直径
         float wheel_circumference = M_PI * wheel_diameter_mm_;  // 轮子周长
         linear_velocity_mmps_ = (speed_pps_ / pulses_per_revolution_) * wheel_circumference;
-        // float filtered = 0.1 * linear_velocity_mmps_ + (1.0f - 0.1) * last_linear_velocity_mmps_;
-        // linear_velocity_mmps_ = filtered;
+        float filtered = 0.1 * linear_velocity_mmps_ + (1.0f - 0.1) * last_linear_velocity_mmps_;
+        linear_velocity_mmps_ = filtered;
         last_linear_velocity_mmps_ =  linear_velocity_mmps_ ;
         // 计算角速度（rad/s）
         // 公式：角速度 = 线速度 / 半径
@@ -72,34 +72,34 @@ namespace jgaencoder
         last_count_ = current_count;
     }
     
-    void Jga25370Encoder::updateWithKalman(uint32_t _dt_ms, float _accel_x)
-    {
-        if (_dt_ms == 0) return;
+    // void Jga25370Encoder::updateWithKalman(uint32_t _dt_ms, float _accel_x)
+    // {
+    //     if (_dt_ms == 0) return;
 
-        // 先执行常规更新
-        update(_dt_ms);
+    //     // 先执行常规更新
+    //     update(_dt_ms);
         
-        // 使用卡尔曼滤波融合编码器线速度和加速度计X轴数据
-        float dt_s = _dt_ms / 1000.0f;
+    //     // 使用卡尔曼滤波融合编码器线速度和加速度计X轴数据
+    //     float dt_s = _dt_ms / 1000.0f;
         
-        // 编码器线速度作为测量值（mm/s）
-        float measurement = linear_velocity_mmps_;
+    //     // 编码器线速度作为测量值（mm/s）
+    //     float measurement = linear_velocity_mmps_;
         
-        // 使用加速度计X轴数据改进预测模型
-        // 加速度计X轴数据单位是m/s²，转换为mm/s²
-        float accel_mmps2 = _accel_x * 1000.0f;  // m/s² -> mm/s²
+    //     // 使用加速度计X轴数据改进预测模型
+    //     // 加速度计X轴数据单位是m/s²，转换为mm/s²
+    //     float accel_mmps2 = _accel_x * 1000.0f;  // m/s² -> mm/s²
         
-        // 使用加速度预测线速度变化：v = v0 + a * dt
-        float predicted_velocity = kalman_linear_velocity_ + accel_mmps2 * dt_s * 0.5f;
+    //     // 使用加速度预测线速度变化：v = v0 + a * dt
+    //     float predicted_velocity = kalman_linear_velocity_ + accel_mmps2 * dt_s * 0.5f;
         
-        // 根据加速度大小自适应调整过程噪声
-        // 如果加速度大，说明运动剧烈，增加过程噪声
-        float accel_change = fabsf(_accel_x);
-        float adaptive_q = kalman_q_ * (1.0f + accel_change * 0.05f);
+    //     // 根据加速度大小自适应调整过程噪声
+    //     // 如果加速度大，说明运动剧烈，增加过程噪声
+    //     float accel_change = fabsf(_accel_x);
+    //     float adaptive_q = kalman_q_ * (1.0f + accel_change * 0.05f);
         
-        // 执行卡尔曼滤波更新（使用自适应过程噪声）
-        kalmanUpdateWithPrediction(measurement, dt_s, adaptive_q, kalman_r_, predicted_velocity);
-    }
+    //     // 执行卡尔曼滤波更新（使用自适应过程噪声）
+    //     kalmanUpdateWithPrediction(measurement, dt_s, adaptive_q, kalman_r_, predicted_velocity);
+    // }
     
     int32_t Jga25370Encoder::getCount() const
     {
@@ -126,13 +126,13 @@ namespace jgaencoder
         return angular_velocity_radps_;
     }
     
-    float Jga25370Encoder::getFilteredLinearVelocity() const
-    {
-        const float alpha = 0.1f;
-        static float v = 0.0f;
-        v = v * (1.0f - alpha) + kalman_linear_velocity_ * alpha;
-        return v;
-    }
+    // float Jga25370Encoder::getFilteredLinearVelocity() const
+    // {
+    //     const float alpha = 0.1f;
+    //     static float v = 0.0f;
+    //     v = v * (1.0f - alpha) + kalman_linear_velocity_ * alpha;
+    //     return v;
+    // }
     
     float Jga25370Encoder::getDistance() const
     {
@@ -160,46 +160,46 @@ namespace jgaencoder
         last_count_ = 32768;
     }
     
-    void Jga25370Encoder::kalmanUpdate(float measurement, float dt)
-    {
-        kalmanUpdate(measurement, dt, kalman_q_);
-    }
+    // void Jga25370Encoder::kalmanUpdate(float measurement, float dt)
+    // {
+    //     kalmanUpdate(measurement, dt, kalman_q_);
+    // }
     
-    void Jga25370Encoder::kalmanUpdate(float measurement, float dt, float q)
-    {
-        kalmanUpdateWithPrediction(measurement, dt, q, kalman_r_, kalman_linear_velocity_);
-    }
+    // void Jga25370Encoder::kalmanUpdate(float measurement, float dt, float q)
+    // {
+    //     kalmanUpdateWithPrediction(measurement, dt, q, kalman_r_, kalman_linear_velocity_);
+    // }
     
-    void Jga25370Encoder::kalmanUpdateWithPrediction(float measurement, float dt, float q, float r, float predicted)
-    {
-        // 卡尔曼滤波算法
-        // 状态：线速度 (mm/s)
-        // 测量：编码器线速度
+    // void Jga25370Encoder::kalmanUpdateWithPrediction(float measurement, float dt, float q, float r, float predicted)
+    // {
+    //     // 卡尔曼滤波算法
+    //     // 状态：线速度 (mm/s)
+    //     // 测量：编码器线速度
         
-        // 预测步骤（Prediction）
-        // x_k|k-1 = predicted (使用外部预测值，如加速度计数据)
-        float x_pred = predicted;
+    //     // 预测步骤（Prediction）
+    //     // x_k|k-1 = predicted (使用外部预测值，如加速度计数据)
+    //     float x_pred = predicted;
         
-        // P_k|k-1 = P_k-1|k-1 + Q (增加不确定性)
-        kalman_p_ = kalman_p_ + q;
+    //     // P_k|k-1 = P_k-1|k-1 + Q (增加不确定性)
+    //     kalman_p_ = kalman_p_ + q;
         
-        // 更新步骤（Update）
-        // 计算卡尔曼增益
-        float k = kalman_p_ / (kalman_p_ + r);
+    //     // 更新步骤（Update）
+    //     // 计算卡尔曼增益
+    //     float k = kalman_p_ / (kalman_p_ + r);
         
-        // 更新状态估计
-        kalman_linear_velocity_ = x_pred + k * (measurement - x_pred);
+    //     // 更新状态估计
+    //     kalman_linear_velocity_ = x_pred + k * (measurement - x_pred);
         
-        // 将滤波后的线速度赋值给linear_velocity_mmps_，这样getLinearVelocity()返回的就是滤波后的值
-        linear_velocity_mmps_ = kalman_linear_velocity_;
+    //     // 将滤波后的线速度赋值给linear_velocity_mmps_，这样getLinearVelocity()返回的就是滤波后的值
+    //     linear_velocity_mmps_ = kalman_linear_velocity_;
         
-        // 更新协方差
-        kalman_p_ = (1.0f - k) * kalman_p_;
+    //     // 更新协方差
+    //     kalman_p_ = (1.0f - k) * kalman_p_;
         
-        // 防止协方差过小或过大
-        if (kalman_p_ < 0.001f) kalman_p_ = 0.001f;
-        if (kalman_p_ > 10.0f) kalman_p_ = 10.0f;
-    }
+    //     // 防止协方差过小或过大
+    //     if (kalman_p_ < 0.001f) kalman_p_ = 0.001f;
+    //     if (kalman_p_ > 10.0f) kalman_p_ = 10.0f;
+    // }
     
     int32_t Jga25370Encoder::handleOverflow(int32_t _current_count)
         {

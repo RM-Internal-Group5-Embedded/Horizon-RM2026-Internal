@@ -64,10 +64,9 @@ arpid::AR ar_left(&motor_left, &encoder_left, &mpu);
 arpid::AR ar_right(&motor_right, &encoder_right, &mpu);
 // ========== mg控制器 ==========
 mg::mg945 servo(&htim2, TIM_CHANNEL_1, 0, 45, 90);
+
+
 #include "jc24btran.hpp"  // JC24B数据收发模块
-
-
-
 // JC24B 数据收发实例
 jc24b::DataTransceiver g_transceiver;
 
@@ -90,9 +89,9 @@ StaticTask_t xMgTaskTCB;
 StackType_t  uxMoveTaskStack[configMINIMAL_STACK_SIZE * 4]; // 512字节栈
 StaticTask_t xMoveTaskTCB;
 
-// // Transceiver任务栈 - 用于JC24B数据收发
-// StackType_t uxTransceiverTaskStack[configMINIMAL_STACK_SIZE * 4];  // 512字节栈
-// StaticTask_t xTransceiverTaskTCB;
+// Transceiver任务栈 - 用于JC24B数据收发
+StackType_t uxTransceiverTaskStack[configMINIMAL_STACK_SIZE * 8];  // 512字节栈
+StaticTask_t xTransceiverTaskTCB;
 
 // PWM控制任务栈
 // StackType_t uxPWMTaskStack[configMINIMAL_STACK_SIZE * 2];  // 256字节栈
@@ -114,8 +113,8 @@ void arTask(void *pvPara) {
   }
 
   // 自动启动AR控制
-  ar_left.setAnglePID(700 * 0.6, 0, 7 * 0.6);
-  ar_right.setAnglePID(700 * 0.6, 0, 7 * 0.6);
+  // ar_left.setAnglePID(700 * 0.6, 0, 7 * 0.6);
+  // ar_right.setAnglePID(700 * 0.6, 0, 7 * 0.6);
   ar_left.enable();
   ar_right.enable();
   static volatile float p;
@@ -123,8 +122,8 @@ void arTask(void *pvPara) {
   static volatile float d;
   static volatile float velocity1;
   static volatile float velocity2;
-  ar_left.setTargetAngleOffset(-3.0f);
-  ar_right.setTargetAngleOffset(-3.0f);
+  ar_left.setTargetAngleOffset(-2.0f);
+  ar_right.setTargetAngleOffset(-2.0f);
   // 配置偏航PID（在电机PID内部执行差速），以及符号（左+1，右-1）
   // ar_left.setYawPID(0.0f, 0.0f, 0.0f);
   // ar_right.setYawPID(0.0f, 0.0f, 0.0f);
@@ -132,18 +131,17 @@ void arTask(void *pvPara) {
   ar_right.setYawSign(-1);
   ar_left.setYawTarget(0.0f);
   ar_right.setYawTarget(0.0f);
-  ar_left.setVelocityPID(0.05, 0.1, 0.00001, -1);
-  ar_right.setVelocityPID(0.05, 0.1, 0.00001, 1);
+  ar_left.setVelocityPID(0.05, 0.1, 0.00001, 1);
+  ar_right.setVelocityPID(0.05, 0.1, 0.00001, -1);
   // 控制周期
   const uint32_t UPDATE_PERIOD_MS = 1;  // 1ms = 1kHz（尽可能快）
   const float dt = UPDATE_PERIOD_MS / 1000.0f;
-  
   while (true) {
     // AR控制更新（双电机）
     ar_left.update(dt);
     ar_right.update(dt);
-    // ar_left.setVelocityPID(p, i, d, 1);
-    // ar_right.setVelocityPID(p, i, d, -1);
+    // ar_left.setVelocityPID(p, i, d, -1);
+    // ar_right.setVelocityPID(p, i, d, 1);
     ar_left.setTargetVelocity(velocity1);   // 基础速度由 yaw 修正叠加
     ar_right.setTargetVelocity(velocity2);
 
@@ -163,11 +161,11 @@ void encoderTask(void *pvPara) {
   
   while (true) {
     // 获取加速度计X轴数据（m/s²）
-    float accel_x = mpu.getAccelX();
+    // float accel_x = mpu.getAccelX();
     
     // 使用卡尔曼滤波更新编码器数据（融合加速度计X轴数据）
-    encoder_left.updateWithKalman(UPDATE_PERIOD_MS, accel_x);
-    encoder_right.updateWithKalman(UPDATE_PERIOD_MS, accel_x);
+    encoder_left.update(UPDATE_PERIOD_MS);
+    encoder_right.update(UPDATE_PERIOD_MS);
     
     // 延时
     vTaskDelay(pdMS_TO_TICKS(UPDATE_PERIOD_MS));
@@ -221,12 +219,10 @@ void mgTask(void *pvPara){
     servo.third_angle();
     vTaskDelay(pdMS_TO_TICKS(ROTATE_TIME_MS));
   }
-
-
 }
 void MoveTask(void *pvPara)
 {
-  bool position[4] = {};
+  bool position[4] = {0};
   bool receivestatus;
   int8_t i = -1;
   int8_t angle_flag = 0;
@@ -241,7 +237,7 @@ void MoveTask(void *pvPara)
       ar_left.setTargetVelocity(50);
       ar_right.setTargetVelocity(50);
     }
-    //在这里加巡线逻辑，然后把侧边sensor优先级加到最大，其次才是巡线
+    // TODO:: 在这里加巡线逻辑，然后把侧边sensor优先级加到最大，其次才是巡线
       if (sensor && !startposition)
       {
         ar_left.setTargetVelocity(0);
@@ -316,27 +312,27 @@ void MoveTask(void *pvPara)
 // }
 
 // Transceiver任务函数 - 负责JC24B数据收发和连接管理
-// void transceiverTask(void *pvPara) {
-//   // 初始化 DataTransceiver（使用 USART2）
-//   g_transceiver.init(&huart2);
+void transceiverTask(void *pvPara) {
+  // 初始化 DataTransceiver（使用 USART2）
+  g_transceiver.init(&huart2);
   
-//   bool positions[4] = {0};
-//   uint32_t loop_count = 0;
+  bool positions[4] = {0};
+  uint32_t loop_count = 0;
   
-//   while (true) {
-//     loop_count++;
+  while (true) {
+    loop_count++;
     
-//     // 主循环处理（检查看门狗超时）
-//     g_transceiver.process();
+    // 主循环处理（检查看门狗超时）
+    g_transceiver.process();
     
-//     // 获取位置数据（如果需要可以在这里处理）
-//     // if (g_transceiver.getPositions(positions)) {
-//     //   // 处理位置数据
-//     // }
+    // 获取位置数据（如果需要可以在这里处理）
+    // if (g_transceiver.getPositions(positions)) {
+    //   // 处理位置数据
+    // }
     
-//     vTaskDelay(pdMS_TO_TICKS(50));  // 50ms延时
-//   }
-// }
+    vTaskDelay(pdMS_TO_TICKS(50));  // 50ms延时
+  }
+}
 
 /**
  * @brief Intialize all the drivers and add task to the scheduler
@@ -357,13 +353,13 @@ void startUserTasks() {
   
   xTaskCreateStatic(mgTask, "MG_Task", configMINIMAL_STACK_SIZE * 3, NULL, 11,
                     uxMgTaskStack, &xMgTaskTCB);
-  xTaskCreateStatic(mgTask, "MoveTask", configMINIMAL_STACK_SIZE * 3, NULL, 11,
-                    uxMoveTaskStack, &xMoveTaskTCB);
+  // xTaskCreateStatic(mgTask, "MoveTask", configMINIMAL_STACK_SIZE * 3, NULL, 11,
+  //                   uxMoveTaskStack, &xMoveTaskTCB);
   // 如果需要手动PWM控制（用于测试），取消注释下面的任务
   // xTaskCreateStatic(pwmTask, "PWM_Task", configMINIMAL_STACK_SIZE * 2, NULL, 3,
   //                   uxPWMTaskStack, &xPWMTaskTCB);
   
   // 创建Transceiver任务 - 中高优先级，负责JC24B数据收发和连接管理
-  // xTaskCreateStatic(transceiverTask, "Transceiver_Task", configMINIMAL_STACK_SIZE * 4, NULL, 4,
-  //                   uxTransceiverTaskStack, &xTransceiverTaskTCB);
+  xTaskCreateStatic(transceiverTask, "Transceiver_Task", configMINIMAL_STACK_SIZE * 4, NULL, 8,
+                    uxTransceiverTaskStack, &xTransceiverTaskTCB);
 }
