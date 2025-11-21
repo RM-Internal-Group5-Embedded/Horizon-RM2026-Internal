@@ -30,7 +30,7 @@ const float CENTER = 1024.0f;
 const float SBUS_SPAN = 783.0f;
 
 static float computeDeltaTime(uint32_t& last_time_ms) {
-    uint32_t current_time = HAL_GetTick();
+    uint32_t current_time = xTaskGetTickCount();
 
     if (last_time_ms == 0 || (current_time - last_time_ms) > 1000) {
         last_time_ms = current_time;
@@ -381,54 +381,82 @@ void ERClawControl::idleMode() {
     }
     // Send zero to both GM6020 and M3508 claw motors
     if (claw_motors.small_claw) {
+        claw_motors.small_claw->initialized = false;
         claw_motors.small_claw->sendCurrent(0);
     }
     
     if (claw_motors.m3508_claw) {
+        claw_motors.m3508_claw->initialized = false;
         claw_motors.m3508_claw->sendCurrent(0);
     }
 }
 
-void ERClawControl::fullManualClaw(const uartdriver::ReceivedValue& received_data){
+void ERClawControl::fullManualClaw(const uartdriver::ReceivedValue& received_data, bool down, bool clasp){
     resetMoveSequence(release_up);
     resetMoveSequence(release_down);
     resetMoveSequence(get_down);
     static uint32_t last_time = 0;
     float dt = computeDeltaTime(last_time);
     int16_t gm6020_current = 0;
-    float gm6020degree = 180*(static_cast<float>(received_data.channel_6) - CENTER) / SBUS_SPAN;
+    float gm6020degree = 90.0f;
+    if(!clasp) gm6020degree = 180*(static_cast<float>(received_data.channel_6) - CENTER) / SBUS_SPAN; 
+    
     float m3508_angle = 360*(static_cast<float>(received_data.channel_3) - CENTER) / SBUS_SPAN;
-    float motor_position = 8*(static_cast<float>(received_data.channel_5) - CENTER) / SBUS_SPAN;
+    
+    float motor_position = 4;
+    if(!down) motor_position = 8*(static_cast<float>(received_data.channel_5) - CENTER) / SBUS_SPAN;
     
     sendClawCurrent(gm6020degree, motor_position, m3508_angle, dt);
 }
 
+
+
+
 void ERClawControl::sendClawCurrent(float gm6020degree, float motor_position, float m3508_angle, float dt){
-    if (claw_motors.small_claw) {
-        // Use PID to reach 720 degrees (2 full rotations)
-        claw_motors.small_claw->setAnglePID(gm6020degree, dt, true);
+    // Ensure all three motors send commands at least once each cycle
+    if(turn){
+    // Motor 1: GM6020 small claw
+        if (claw_motors.small_claw) {
+            // Use PID to reach target angle - always sends when called with send=true
+            claw_motors.small_claw->setAnglePID(gm6020degree, dt, true);
+        }
+    // Motor 3: M3508 claw
+        if (claw_motors.m3508_claw) {
+            // Use PID to reach target angle - always sends when called with send=true
+            claw_motors.m3508_claw->setAnglePID(m3508_angle, dt, true);
+        }
+        turn = false;
+        return;
     }
-    // DMJ4310 base claw control - RELEASE MODE: go to 0° (top shaft angle)
+    turn = true;;
+    // Motor 2: DMJ4310 base claw
     if (claw_motors.base_claw) {
         // Ensure motor is enabled before sending commands
         static uint32_t last_enable_time = 0;
+        static uint32_t last_call_time = 0;
         uint32_t current_time = HAL_GetTick();
-        // Send enable command periodically (every 100ms) to keep motor enabled
-        if (current_time - last_enable_time >= 100) {
+       
+        // Enable immediately on first call after idle (gap > 200ms indicates transition from idle)
+        // Or enable periodically (every 100ms) to keep motor enabled
+        if (last_call_time == 0 || (current_time - last_call_time > 200) || (current_time - last_enable_time >= 100)) {
+            // Clear error codes before enabling to ensure motor can enable
+            if (claw_motors.base_claw->hasError()) {
+                claw_motors.base_claw->error_code = 0;
+                claw_motors.base_claw->rx_motor_id = 0;
+            }
             claw_motors.base_claw->enableMotor();
             last_enable_time = current_time;
         }
-        // MIT command: position=12.566 rad, velocity=0, kp=50, kd=2, torque=0
-        claw_motors.base_claw->sendMITCommand(motor_position, 0.01f, 
-                                claw_motors.base_claw->RPM_KP, 
-                                claw_motors.base_claw->RPM_KD, 
+        last_call_time = current_time;
+       
+        // MIT command: always sends command each cycle
+        claw_motors.base_claw->sendMITCommand(motor_position, 0.01f,
+                                claw_motors.base_claw->RPM_KP,
+                                claw_motors.base_claw->RPM_KD,
                                 claw_motors.base_claw->RPM_KI);
     }
-
-    if (claw_motors.m3508_claw) {
-        claw_motors.m3508_claw->setAnglePID(m3508_angle, dt, true);
-    }
 }
+
 
 void ERClawControl::resetMoveSequence(MoveSequence &target){
     target.active = false;
@@ -442,9 +470,12 @@ void ERClawControl::resetMoveSequence(MoveSequence &target){
     }
 }
 
+
 void ERClawControl::captureStartDegrees(MoveSequence &sequence, uint8_t phase_index){
     if(sequence.progress[phase_index] == false){
         sequence.progress[phase_index] = true;
+        // Capture actual current position to ensure smooth phase transitions
+        // This prevents jumps when transitioning between phases
         if(claw_motors.m3508_claw){
             sequence.m3508_startdeg = claw_motors.m3508_claw->motor_feedback.top_shaft_angle;
         }
@@ -457,58 +488,169 @@ void ERClawControl::captureStartDegrees(MoveSequence &sequence, uint8_t phase_in
     }
 }
 
-void ERClawControl::moveMotor_gm6020(   float starting_degree, 
-                                        uint16_t target, float progress, float dt){
-    int16_t starting = (starting_degree / 180.0f) * SBUS_SPAN + CENTER;
-    float gm6020degree = 
+
+float ERClawControl::calculateProgress(uint32_t duration, const MoveSequence& sequence, uint8_t phase_index){
+    // Calculate offset by summing all previous phase durations (0 through phase_index-1)
+    uint32_t offset = 0;
+    for(uint8_t i = 0; i < phase_index; i++){
+        offset += sequence.duration[i];
+    }
+   
+    // Get the current phase duration
+    uint16_t phase_duration = sequence.duration[phase_index];
+    if(phase_duration == 0) return 1.0f; // Avoid division by zero
+   
+    float progress = static_cast<float>(duration - offset) / static_cast<float>(phase_duration);
+    if(progress > 1.0f) progress = 1.0f;
+    if(progress < 0.0f) progress = 0.0f;
+    return progress;
+}
+
+
+uint32_t ERClawControl::calculateTotalDuration(const MoveSequence& sequence, uint8_t phase_index){
+    // Sum durations from [0] to [phase_index] (inclusive)
+    uint32_t total = 0;
+    for(uint8_t i = 0; i <= phase_index; i++){
+        total += sequence.duration[i];
+    }
+    return total;
+}
+
+
+void ERClawControl::moveMotor_gm6020(   float starting_degree,
+                                        float target, float progress, float dt){
+    // Use captured start position for consistent interpolation
+    // The start position is captured once at the beginning of each phase
+    if(turn) return;
+    turn = false;
+    float starting = (static_cast<float> (starting_degree) / 180.0f) * SBUS_SPAN + CENTER;
+    float gm6020degree =
     180*(static_cast<float>(starting + (target - starting)*progress) - CENTER) / SBUS_SPAN;
-    
+    //+ 180*(static_cast<float>(received_data_.channel_6) - CENTER) / SBUS_SPAN;
+   
     if (claw_motors.small_claw) {
         claw_motors.small_claw->setAnglePID(gm6020degree, dt, true);
     }
 }
 
-void ERClawControl::moveMotor_m3508(float starting_degree, 
-                                    uint16_t target, float progress, float dt){
-    int16_t starting = (starting_degree / 360.0f) * SBUS_SPAN + CENTER;
-    float m3508_angle = 
+
+void ERClawControl::moveMotor_m3508(float starting_degree,
+                                    float target, float progress, float dt){
+    if(turn) return;
+    turn = false;
+    float starting = (static_cast<float> (starting_degree) / 360.0f) * SBUS_SPAN + CENTER;
+    float m3508_angle =
     360*(static_cast<float>(starting + (target - starting)*progress) - CENTER) / SBUS_SPAN;
-    
-    
+    //+ 360*(static_cast<float>(received_data_.channel_3) - CENTER) / SBUS_SPAN;
+   
+
+
     if (claw_motors.m3508_claw) {
         claw_motors.m3508_claw->setAnglePID(m3508_angle, dt, true);
     }
 }
 
-void ERClawControl::moveMotor_dmj(  float starting_degree, 
-                                    uint16_t target, float progress, float dt){
-    int16_t starting = (starting_degree / 100.0f) * SBUS_SPAN + CENTER;
-    float motor_position = 
+
+void ERClawControl::moveMotor_dmj(  float starting_degree,
+                                    float target, float progress, float dt){
+    if(!turn) return;
+    turn = true;
+    float starting = (static_cast<float> (starting_degree) / 80.0f) * SBUS_SPAN + CENTER;
+    float motor_position =
     8*(static_cast<float>(starting + (target - starting)*progress) - CENTER) / SBUS_SPAN;
-    
+    //+ 8*(static_cast<float>(received_data_.channel_5) - CENTER) / SBUS_SPAN;
      
     if (claw_motors.base_claw) {
         // Ensure motor is enabled before sending commands
         static uint32_t last_enable_time = 0;
+        static uint32_t last_call_time = 0;
         uint32_t current_time = HAL_GetTick();
-        // Send enable command periodically (every 100ms) to keep motor enabled
-        if (current_time - last_enable_time >= 100) {
+       
+        // Enable immediately on first call after idle (gap > 200ms indicates transition from idle)
+        // Or enable periodically (every 100ms) to keep motor enabled
+        if (last_call_time == 0 || (current_time - last_call_time > 200) || (current_time - last_enable_time >= 100)) {
+            // Clear error codes before enabling to ensure motor can enable
+            if (claw_motors.base_claw->hasError()) {
+                claw_motors.base_claw->error_code = 0;
+                claw_motors.base_claw->rx_motor_id = 0;
+            }
             claw_motors.base_claw->enableMotor();
             last_enable_time = current_time;
         }
+        last_call_time = current_time;
+       
         // MIT command: position=12.566 rad, velocity=0, kp=50, kd=2, torque=0
-        claw_motors.base_claw->sendMITCommand(motor_position, 0.01f, 
-                                claw_motors.base_claw->RPM_KP, 
-                                claw_motors.base_claw->RPM_KD, 
+        claw_motors.base_claw->sendMITCommand(motor_position, 0.01f,
+                                claw_motors.base_claw->RPM_KP,
+                                claw_motors.base_claw->RPM_KD,
                                 claw_motors.base_claw->RPM_KI);
     }
 }
+
+
+void ERClawControl::holdMotor_gm6020(float target, float dt){
+    if(!turn) return;
+    turn = false;
+    float gm6020degree =
+    180*(static_cast<float>(target - CENTER)) / SBUS_SPAN;
+    //+ 180*(static_cast<float>(received_data_.channel_6) - CENTER) / SBUS_SPAN;
+   
+    if (claw_motors.small_claw) {
+        claw_motors.small_claw->setAnglePID(gm6020degree, dt, true);
+    }
+}
+void ERClawControl::holdMotor_m3508(float target, float dt){
+    if(!turn) return;
+    turn = false;
+    float m3508_angle =
+    360*(static_cast<float>(target - CENTER)) / SBUS_SPAN;
+    //+ 360*(static_cast<float>(received_data_.channel_3) - CENTER) / SBUS_SPAN;
+   
+    if (claw_motors.m3508_claw) {
+        claw_motors.m3508_claw->setAnglePID(m3508_angle, dt, true);
+    }
+}
+void ERClawControl::holdMotor_dmj(float target, float dt){
+    if(turn) return;
+    turn = true;
+    float motor_position =
+    8*(static_cast<float>(target) - CENTER) / SBUS_SPAN;
+    //+ 8*(static_cast<float>(received_data_.channel_5) - CENTER) / SBUS_SPAN;
+   
+    if (claw_motors.base_claw) {
+        // Ensure motor is enabled before sending commands
+        static uint32_t last_enable_time = 0;
+        static uint32_t last_call_time = 0;
+        uint32_t current_time = HAL_GetTick();
+       
+        // Enable immediately on first call after idle (gap > 200ms indicates transition from idle)
+        // Or enable periodically (every 100ms) to keep motor enabled
+        if (last_call_time == 0 || (current_time - last_call_time > 200) || (current_time - last_enable_time >= 100)) {
+            // Clear error codes before enabling to ensure motor can enable
+            if (claw_motors.base_claw->hasError()) {
+                claw_motors.base_claw->error_code = 0;
+                claw_motors.base_claw->rx_motor_id = 0;
+            }
+            claw_motors.base_claw->enableMotor();
+            last_enable_time = current_time;
+        }
+        last_call_time = current_time;
+       
+        // MIT command: position=12.566 rad, velocity=0, kp=50, kd=2, torque=0
+        claw_motors.base_claw->sendMITCommand(motor_position, 0.01f,
+                                claw_motors.base_claw->RPM_KP,
+                                claw_motors.base_claw->RPM_KD,
+                                claw_motors.base_claw->RPM_KI);
+    }
+}
+
 
 
 void ERClawControl::getDownSequence(){
     static uint32_t last_time = 0;
     float dt = computeDeltaTime(last_time);
     float progress = 0;
+
 
     if(!get_down.active){
         // Reset other sequences when starting this one
@@ -523,89 +665,228 @@ void ERClawControl::getDownSequence(){
     get_down.currenttime = xTaskGetTickCount();
     // FIX: Use uint32_t to prevent overflow (uint16_t overflows after ~65 seconds)
     uint32_t duration = get_down.currenttime - get_down.starttime;
-    
+   
     // Sequence:
     // Phase 0 extend all
     // Phase 1 lower down
     // Phase 2 clasp
-    
-    if(duration < get_down.duration[0]){
-        progress = static_cast<float>(duration) / get_down.duration[0];
-        if(progress > 1.0f) progress = 1.0f;
-        if(progress < 0.0f) progress = 0.0f;
-        
+   
+    if(duration < calculateTotalDuration(get_down, 0)){ // arm all goes up, claw open
+        progress = calculateProgress(duration, get_down, 0);
+       
         captureStartDegrees(get_down, 0);
 
-        moveMotor_m3508(get_down.m3508_startdeg, 1800, progress, dt);
-        moveMotor_gm6020(get_down.gm6020_startdeg, 550, progress, dt);
-        moveMotor_dmj(get_down.dmj_startdeg, 1024, progress, dt);
-        //calculate motor movement
-        
-    } else if(duration < (get_down.duration[1] + get_down.duration[0])){
-        
-        progress = static_cast<float>(duration - get_down.duration[0]) 
-                    / get_down.duration[1];
-        if(progress > 1.0f) progress = 1.0f;
-        if(progress < 0.0f) progress = 0.0f;
+
+        moveMotor_m3508(get_down.m3508_startdeg, 1500, progress, dt);
+        moveMotor_gm6020(get_down.gm6020_startdeg, 800, progress, dt);
+        moveMotor_dmj(get_down.dmj_startdeg, 1000, progress, dt);
+    } else if(duration < calculateTotalDuration(get_down, 1)){ //arm goes down
+        progress = calculateProgress(duration, get_down, 1);
+
+
         captureStartDegrees(get_down, 1);
-        moveMotor_m3508(get_down.m3508_startdeg, 1800, progress, dt);
-        moveMotor_gm6020(get_down.gm6020_startdeg, 550, progress, dt);
-        moveMotor_dmj(get_down.dmj_startdeg, 1600, progress, dt);
-    } else if(duration < (get_down.duration[2] + get_down.duration[1] + get_down.duration[0])){
-        progress = static_cast<float>(duration - get_down.duration[0] - get_down.duration[1]) 
-                    / get_down.duration[2];
-        if(progress > 1.0f) progress = 1.0f;
-        if(progress < 0.0f) progress = 0.0f;
+
+
+        holdMotor_m3508(1500, dt);
+        holdMotor_gm6020(800, dt);
+        moveMotor_dmj(get_down.dmj_startdeg, 1500, progress, dt);
+    } else if(duration < calculateTotalDuration(get_down, 2)){ //arm down sweep back
+        progress = calculateProgress(duration, get_down, 2);
+
+
         captureStartDegrees(get_down, 2);
-        moveMotor_m3508(get_down.m3508_startdeg, 1800, progress, dt);
-        moveMotor_gm6020(get_down.gm6020_startdeg, 1500, progress, dt);
-        moveMotor_dmj(get_down.dmj_startdeg, 1600, progress, dt);
-    } else if(duration < (get_down.duration[3] + get_down.duration[2] + get_down.duration[1] + get_down.duration[0])){
-        progress = static_cast<float>(duration - get_down.duration[0] - get_down.duration[1] - get_down.duration[2]) 
-                    / get_down.duration[2];
-        if(progress > 1.0f) progress = 1.0f;
-        if(progress < 0.0f) progress = 0.0f;
+
+
+        moveMotor_m3508(get_down.m3508_startdeg, 850, progress, dt);
+        holdMotor_gm6020(450, dt);
+        holdMotor_dmj(1500, dt);
+    } else if(duration < calculateTotalDuration(get_down, 3)){ //claw clench
+        progress = calculateProgress(duration, get_down, 3);
+
+
         captureStartDegrees(get_down, 3);
-        moveMotor_m3508(get_down.m3508_startdeg, 1800, progress, dt);
+
+
+        moveMotor_m3508(get_down.m3508_startdeg, 1024, progress, dt);
         moveMotor_gm6020(get_down.gm6020_startdeg, 1500, progress, dt);
-        moveMotor_dmj(get_down.dmj_startdeg, 770, progress, dt);
-    } else {
-        progress = 1;
-        moveMotor_m3508(get_down.m3508_startdeg, 1800, progress, dt);
-        moveMotor_gm6020(get_down.gm6020_startdeg, 1500, progress, dt);
-        moveMotor_dmj(get_down.dmj_startdeg, 770, progress, dt);
+        holdMotor_dmj(1500, dt);
+    } else if(duration < calculateTotalDuration(get_down, 4)){ //clasp safety
+        holdMotor_m3508(1024, dt);
+        holdMotor_gm6020(1500, dt);
+        holdMotor_dmj(1500, dt);
+    } else if(duration < calculateTotalDuration(get_down, 5)){ //arm move up
+        progress = calculateProgress(duration, get_down, 5);
+
+
+        captureStartDegrees(get_down, 5);
+
+
+        holdMotor_m3508(1024, dt);
+        holdMotor_gm6020(1500, dt);
+        moveMotor_dmj(get_down.dmj_startdeg, 1024, progress, dt);
+    } else { //final state: holding object up
+        progress = 1.0f;
+        // Final phase - hold position
+        holdMotor_m3508(1024, dt);
+        holdMotor_gm6020(1500, dt);
+        holdMotor_dmj(1024, dt);
     }
+}  
 
-    
-    //gm6020 to zero
-    //dmj to 0 deg, 947(without), 528(with)
-    //sm3508 to 0 deg (1800) max
-
-}
 
 void ERClawControl::releaseDownSequence(){
-    resetMoveSequence(release_up);
-    resetMoveSequence(get_down);
-    if(!release_down.active){
-        release_down.active = true;
-        release_down.starttime = HAL_GetTick();
-        
-    }
+    static uint32_t last_time = 0;
+    float dt = computeDeltaTime(last_time);
+    float progress = 0;
 
-}
 
-void ERClawControl::releaseUpSequence(){
-    resetMoveSequence(release_down);
-    resetMoveSequence(get_down);
     if(!release_down.active){
+        // Reset other sequences when starting this one
+        resetMoveSequence(release_up);
+        resetMoveSequence(release_down);
+        resetMoveSequence(get_down);
+        // Initialize this sequence
         release_down.active = true;
         release_down.starttime = xTaskGetTickCount();
-        
-
     }
+    // Update current time every cycle (always update, regardless of active state)
+    release_down.currenttime = xTaskGetTickCount();
+    // FIX: Use uint32_t to prevent overflow (uint16_t overflows after ~65 seconds)
+    uint32_t duration = release_down.currenttime - release_down.starttime;
+   
+    if(duration < calculateTotalDuration(release_down, 0)){ //clasped arm goes up
+        progress = calculateProgress(duration, release_down, 0);
+       
+        captureStartDegrees(release_down, 0);
 
 
+        moveMotor_m3508(release_down.m3508_startdeg, 1800, progress, dt);
+        holdMotor_gm6020(1500, dt);
+        moveMotor_dmj(release_down.dmj_startdeg, 770, progress, dt);
+    } else if(duration < calculateTotalDuration(release_down, 1)){ //clasped arm goes down
+        progress = calculateProgress(duration, release_down, 1);
+
+
+        captureStartDegrees(release_down, 1);
+
+
+        moveMotor_m3508(release_down.m3508_startdeg, 1800, progress, dt);
+        holdMotor_gm6020(1500, dt);
+        moveMotor_dmj(release_down.dmj_startdeg, 1800, progress, dt);
+    } else if(duration < calculateTotalDuration(release_down, 2)){ //clasped arm release
+        progress = calculateProgress(duration, release_down, 2);
+
+
+        captureStartDegrees(release_down, 2);
+
+
+        holdMotor_m3508(1800, dt);
+        moveMotor_gm6020(release_down.gm6020_startdeg, 450, progress, dt);
+        holdMotor_dmj(1400, dt);
+    } else if(duration < calculateTotalDuration(release_down, 3)){ //clasped arm moves back up
+        progress = calculateProgress(duration, release_down, 3);
+
+
+        captureStartDegrees(release_down, 3);
+
+
+        holdMotor_m3508(1800, dt);
+        holdMotor_gm6020(450, dt);
+        moveMotor_dmj(release_down.dmj_startdeg, 770, progress, dt);
+    } else if(duration < calculateTotalDuration(release_down, 4)){ //move back to relax
+        progress = calculateProgress(duration, release_down, 4);
+
+
+        captureStartDegrees(release_down, 4);
+
+
+        moveMotor_m3508(release_down.m3508_startdeg, 1024, progress, dt);
+        holdMotor_gm6020(450, dt);
+        holdMotor_dmj(770, dt);
+    } else { //arm is idle
+        holdMotor_m3508(1024, dt);
+        holdMotor_gm6020(450, dt);
+        holdMotor_dmj(770, dt);
+    }
 }
+
+
+void ERClawControl::releaseUpSequence(){
+    static uint32_t last_time = 0;
+    float dt = computeDeltaTime(last_time);
+    float progress = 0;
+
+
+    if(!release_up.active){
+        // Reset other sequences when starting this one
+        resetMoveSequence(release_up);
+        resetMoveSequence(release_down);
+        resetMoveSequence(get_down);
+        // Initialize this sequence
+        release_up.active = true;
+        release_up.starttime = xTaskGetTickCount();
+    }
+    // Update current time every cycle (always update, regardless of active state)
+    release_up.currenttime = xTaskGetTickCount();
+    // FIX: Use uint32_t to prevent overflow (uint16_t overflows after ~65 seconds)
+    uint32_t duration = release_up.currenttime - release_up.starttime;
+   
+    if(duration < calculateTotalDuration(release_up, 0)){ //clasped arm goes up
+        progress = calculateProgress(duration, release_up, 0);
+       
+        captureStartDegrees(release_up, 0);
+
+
+        moveMotor_m3508(release_up.m3508_startdeg, 1800, progress, dt);
+        holdMotor_gm6020(1500, dt);
+        moveMotor_dmj(release_up.dmj_startdeg, 700, progress, dt);
+    } else if(duration < calculateTotalDuration(release_up, 1)){ //clasped arm waits for car to push
+        progress = calculateProgress(duration, release_up, 1);
+
+
+        captureStartDegrees(release_up, 1);
+
+
+        holdMotor_m3508(1800, dt);
+        holdMotor_gm6020(1500, dt);
+        holdMotor_dmj(750, dt);
+    } else if(duration < calculateTotalDuration(release_up, 2)){ //clasped arm release
+        progress = calculateProgress(duration, release_up, 2);
+
+
+        captureStartDegrees(release_up, 2);
+
+
+        holdMotor_m3508(1800, dt);
+        moveMotor_gm6020(release_up.gm6020_startdeg, 450, progress, dt);
+        holdMotor_dmj(750, dt);
+    } else if(duration < calculateTotalDuration(release_up, 3)){ //clasped arm stalls at up
+        progress = 1;
+
+
+        captureStartDegrees(release_up, 3);
+
+
+        holdMotor_m3508(1800, dt);
+        holdMotor_gm6020(450, dt);
+        holdMotor_dmj(770, dt);
+    } else if(duration < calculateTotalDuration(release_up, 4)){ //relax
+        progress = calculateProgress(duration, release_up, 4);
+
+
+        captureStartDegrees(release_up, 4);
+
+
+        moveMotor_m3508(release_up.m3508_startdeg, 1024, progress, dt);
+        holdMotor_gm6020(450, dt);
+        holdMotor_dmj(770, dt);
+    } else { //arm is idle
+        holdMotor_m3508(1024, dt);
+        holdMotor_gm6020(450, dt);
+        holdMotor_dmj(770, dt);
+    }
+}
+
 
 
 
@@ -710,11 +991,18 @@ void ERClawControl::switchState(const uartdriver::ReceivedValue& received_data) 
     if(received_data.channel_10 <= 1024) {
         current_state = ClawState::IDLE;
     } else {
-        if(received_data.channel_7 < 500){
+        if((received_data.channel_7 < 500) && (received_data.channel_8 < 500)){
             current_state = ClawState::MANUAL;
-        } else {
-            current_state = ClawState::GETDOWN;
-        }
+        } 
+        if((received_data.channel_7 > 1500) && (received_data.channel_8 > 1500)){
+            current_state = ClawState::CLASPDOWN;
+        } 
+        if((received_data.channel_7 < 500) && (received_data.channel_8 > 1500)){
+            current_state = ClawState::DOWN;
+        } 
+        if((received_data.channel_7 > 1500) && (received_data.channel_8 < 500)){
+            current_state = ClawState::CLASP;
+        } 
         
         // channel_10 > 1024: Active mode - process commands
         // if (received_data.channel_7 < 500) {
@@ -746,16 +1034,40 @@ void ERClawControl::update(const uartdriver::ReceivedValue& received_data) {
             idleMode();
             break;
         case ClawState::CLASP:
-            claspMode(received_data);
+            fullManualClaw(received_data, false, true);
+            break;
+        case ClawState::DOWN:
+            fullManualClaw(received_data, true, false);
+            break;
+        case ClawState::CLASPDOWN:
+            fullManualClaw(received_data, true, true);
             break;
         case ClawState::RELEASE:
             releaseMode(received_data);
             break;
         case ClawState::GETDOWN:
+            // claw_motors.base_claw->RPM_KP = 5.0f;
+            // claw_motors.base_claw->RPM_KI = 0.0f;
+            // claw_motors.base_claw->RPM_KP = 2.0f;
             getDownSequence();
             break;
         case ClawState::MANUAL:
-            fullManualClaw(received_data);
+            // claw_motors.base_claw->RPM_KP = 5.0f;
+            // claw_motors.base_claw->RPM_KI = 0.0f;
+            // claw_motors.base_claw->RPM_KP = 0.0f;
+            fullManualClaw(received_data, false, false);
+            break;
+        case ClawState::RELEASEDOWN:
+            // claw_motors.base_claw->RPM_KP = 5.0f;
+            // claw_motors.base_claw->RPM_KI = 0.0f;
+            // claw_motors.base_claw->RPM_KP = 0.0f;
+            releaseDownSequence();
+            break;
+        case ClawState::RELEASEUP:
+            // claw_motors.base_claw->RPM_KP = 5.0f;
+            // claw_motors.base_claw->RPM_KI = 0.0f;
+            // claw_motors.base_claw->RPM_KP = 2.0f;
+            releaseUpSequence();
             break;
         default:
             idleMode();

@@ -489,8 +489,8 @@ void startUserTasks() {
   
   //mpu6500 (medium priority, runs at 1kHz for fast robot with minimal drift)
   // Higher priority (3) ensures consistent 1ms updates for accuracy
-  xTaskCreateStatic(mpuTask, "MPU_Task", configMINIMAL_STACK_SIZE * 4, NULL, 3,
-                   uxMpuTaskStack, &xMpuTaskTCB);
+  // xTaskCreateStatic(mpuTask, "MPU_Task", configMINIMAL_STACK_SIZE * 4, NULL, 3,
+  //                  uxMpuTaskStack, &xMpuTaskTCB);
   /**
    * @todo Add your own task here
    */

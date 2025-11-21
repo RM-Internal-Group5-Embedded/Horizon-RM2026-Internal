@@ -106,7 +106,7 @@ public:
 };
 
 enum class ClawState {
-    IDLE, CLASP, RELEASE, GETDOWN, MANUAL
+    IDLE, CLASP, RELEASE, GETDOWN, MANUAL, RELEASEUP, RELEASEDOWN, DOWN, CLASPDOWN
 };
 
 enum class ArmState {
@@ -123,7 +123,7 @@ struct MoveSequence {
     bool active = false;
     uint32_t starttime = 0;
     uint32_t currenttime = 0;
-    uint16_t duration[6] = {2000, 2000, 500, 
+    uint16_t duration[6] = {500, 500, 500, 
                             500, 500, 500};
     float speed[6] = {500.0f, 500.0f, 500.0f, 
                       500.0f, 500.0f, 500.0f};
@@ -151,7 +151,7 @@ public:
      MoveSequence get_down;
      MoveSequence release_up;
      MoveSequence release_down;
-
+    bool turn = 0;
     ClawMotors claw_motors;
 
     ClawState current_state = ClawState::IDLE;
@@ -169,19 +169,41 @@ public:
 
     void sendClawCurrent(float gm6020degree, float motor_position, float m3508_angle, float dt);
 
+
     void resetMoveSequence(MoveSequence &target);
+
 
     void captureStartDegrees(MoveSequence &sequence, uint8_t phase_index);
 
-    void moveMotor_gm6020(float starting, uint16_t target, float progress, float dt);
-    void moveMotor_m3508(float starting, uint16_t target, float progress, float dt);
-    void moveMotor_dmj(float starting, uint16_t target, float progress, float dt);
+
+    float calculateProgress(uint32_t duration, const MoveSequence& sequence, uint8_t phase_index);
+    uint32_t calculateTotalDuration(const MoveSequence& sequence, uint8_t phase_index);
+
+
+    void moveMotor_gm6020(float starting, float target, float progress, float dt);
+    void moveMotor_m3508(float starting, float target, float progress, float dt);
+    void moveMotor_dmj(float starting, float target, float progress, float dt);
+
+
+    void holdMotor_gm6020(float target, float dt);
+    void holdMotor_m3508(float target, float dt);
+    void holdMotor_dmj(float target, float dt);
+
+
+    void idleMotor_gm6020();
+    void idleMotor_m3508();
+    void idleMotor_dmj();
+
+
+
 
 
 
     void getDownSequence();
 
+
     void releaseDownSequence();
+
 
     void releaseUpSequence();
     
@@ -191,7 +213,7 @@ public:
 
     void downMode(const uartdriver::ReceivedValue& received_data);
 
-    void fullManualClaw(const uartdriver::ReceivedValue& received_data);
+    void fullManualClaw(const uartdriver::ReceivedValue& received_data, bool down, bool clasp);
     
     void setState(ClawState state) { current_state = state; }
     
