@@ -4,17 +4,22 @@ import os
 import json
 import cv2  
 import numpy as np
+from PIL import Image
 import time
 from JC42BSending import JC24BTransceiver
 import serial.tools.list_ports
 
+red=[0,0,255]#red in BGR colorspace
+blue=[255,0,0]
+green=[0,255,0]
+
 CONFIG_DIR = os.path.join(os.path.dirname(__file__), 'config')
-REGIONS_PATH = os.path.join(CONFIG_DIR, 'block_regions_view.json')
+REGIONS_BLOCK_PATH = os.path.join(CONFIG_DIR, 'block_regions_view.json')
+REGIONS_COLOR_PATH = os.path.join(CONFIG_DIR, 'color_plate_region.json')
 
 
 def find_jc24b_port():
     """自动查找可能的JC24B设备"""
-    possible_ports = []
     
     # 获取所有串口设备
     ports = list(serial.tools.list_ports.comports())
@@ -45,13 +50,17 @@ def find_jc24b_port():
     
     return None
 
-def load_regions():
-    if not os.path.exists(REGIONS_PATH):
-        print("缺少block_regions_view.json文件,需要先运行define_regions.py")
+def load_regions(path):
+    if not os.path.exists(path):
+        print("缺少json文件,需要先运行define_regions.py")
         return []
-    with open(REGIONS_PATH,'r') as f:
+    if path==REGIONS_COLOR_PATH:
+        a='region'
+    else:
+        a='regions'
+    with open(path,'r') as f:
         data=json.load(f)
-        return data['regions']
+        return data[a]
         #json.dump({'regions':regions},f) 用字典存的
 
 def point_in_region(point,region):
@@ -101,9 +110,77 @@ def regions_to_positions(index):
     positions[index]=1
     return positions
 
+#color 
+
+# 创建区域掩膜
+def create_region_mask(frame, region_points):
+    if region_points is None or len(region_points) < 3:
+        return None
+    
+    mask = np.zeros(frame.shape[:2], dtype=np.uint8) #全0（黑色）画布
+    points = np.array(region_points, dtype=np.int32)
+    cv2.fillPoly(mask, [points], 255) #画布，区域，填充颜色
+    return mask
+
+#找到color所在的地方 获取mask
+def detect_colors(frame,region_mask=None):
+    hsv_frame=cv2.cvtColor(frame,cv2.COLOR_BGR2HSV)#转换为HSV
+
+    # 红色在HSV空间上分两段
+    lower_red1 = np.array([0, 70, 50])
+    upper_red1 = np.array([10, 255, 255])
+    lower_red2 = np.array([170, 70, 50])
+    upper_red2 = np.array([180, 255, 255])
+    
+    red_mask1 = cv2.inRange(hsv_frame, lower_red1, upper_red1)
+    red_mask2 = cv2.inRange(hsv_frame, lower_red2, upper_red2)
+    red_mask = cv2.bitwise_or(red_mask1, red_mask2)
+
+    # 蓝色区间Hue建议100~130左右，饱和度/明度门槛别太低
+    lower_blue = np.array([100, 120, 70])
+    upper_blue = np.array([130, 255, 255])
+    blue_mask = cv2.inRange(hsv_frame, lower_blue, upper_blue)
+
+    # 绿色区间Hue
+    lower_green = np.array([35, 40, 40])
+    upper_green = np.array([90, 255, 255])
+    green_mask = cv2.inRange(hsv_frame, lower_green, upper_green)
+
+    #去噪
+    kernel = np.ones((5, 5), np.uint8)
+    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
+    blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel)
+    green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_OPEN, kernel)
+
+     # 如果指定了区域掩膜，则只在区域内检测
+    if region_mask is not None:
+        #裁剪颜色掩膜
+        #cv2.bitwise_and(A, B) 按位OR：A和B都为255才保留
+        red_mask = cv2.bitwise_and(red_mask, region_mask)
+        blue_mask = cv2.bitwise_and(blue_mask, region_mask)
+        green_mask = cv2.bitwise_and(green_mask, region_mask)
+    
+    return red_mask, blue_mask, green_mask  
+
+
+#找到color对应的所有bounding box
+def find_bboxs(mask):
+    #找到所有独立的颜色区域
+    contours, _ =cv2.findContours(mask,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+    bboxs=[]
+    
+    for contour in contours:
+        # 过滤掉太小的区域
+        area=cv2.contourArea(contour)
+        if area>1000:  #可以修改这个阈值来过滤噪声
+            x,y,w,h=cv2.boundingRect(contour)
+            bboxs.append((x,y,x+w,y+h))
+    
+    return bboxs
+
 def main():
     try:
-        regions=load_regions()
+        regions=load_regions(REGIONS_BLOCK_PATH)
         if not regions:
             return 
         
@@ -114,6 +191,14 @@ def main():
             print("USB相机连接失败")
             return 
         
+        capture.set(cv2.CAP_PROP_FRAME_HEIGHT,720)
+        capture.set(cv2.CAP_PROP_FRAME_WIDTH,1280)#设置相机采集分辨率 还要看是否支持
+
+        # 读取区域配置
+        region_points = load_regions(REGIONS_COLOR_PATH)
+        use_region = region_points is not None
+        region_mask = None
+
 
         # 自动查找JC24B设备
         jc24b_port = find_jc24b_port()
@@ -157,6 +242,9 @@ def main():
                 print("无法读取视频帧")
                 break
             
+            if use_region and region_mask is None:
+                region_mask = create_region_mask(frame, region_points)
+        
             #mask:处理后的二值图像 detections:检测到的block列表，包含位置和中心点
             mask,detections = detect_blocks(frame)
 
@@ -207,28 +295,6 @@ def main():
                         transceiver.connect() 
                 last_send_time = current_time
             
-            # for i in range(len(regions)):
-            #     was_inside=prev_inside[i]
-            #     is_inside=now_inside[i]
-                
-            #     if not was_inside and is_inside:
-            #         print("Block 到达第", i+1 ,"个区域") #无线传输
-            #         positions=regions_to_positions(i)
-            #         ok = False
-            #         if transceiver.connect():
-            #             ok=transceiver.send_positions(positions)
-            #             if ok:
-            #                 print("发送成功: ", positions)
-            #         if not ok:
-            #             print("首次发送失败，尝试重连并重发...")
-            #             # 尝试重连一次
-            #             time.sleep(0.05)
-            #             ok2=transceiver.send_positions(positions)
-            #             if ok2:
-            #                 print("重连后发送成功")
-            #             else:
-            #                 print("重连后仍然发送失败（请检查串口或接收端）")
-            # 检查ACK和通信状态
             if transceiver:
                 # 非阻塞检查ACK
                 transceiver.check_for_ack()
@@ -243,21 +309,47 @@ def main():
                     if connection_healthy:
                         print("警告: 通信连接异常 - 未收到ACK")
                         connection_healthy = False
-                
-            # 显示状态信息
-            status_color = (0, 255, 0) if connection_healthy else (0, 0, 255)
-            cv2.putText(canvas, f"通信: {'正常' if connection_healthy else '异常'}", 
-                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
-                            
-            cv2.putText(canvas, f"位置: {current_positions}", 
-                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                
-            cv2.putText(canvas, f"连续帧: {consecutive_frames}/{DEBOUNCE_THRESHOLD}", 
-                    (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             
+            #检测红蓝色块，现在可以检测多个
+            red_mask, blue_mask, green_mask = detect_colors(frame,region_mask)
+            red_blocks = find_bboxs(red_mask)
+            blue_blocks = find_bboxs(blue_mask)
+            green_blocks=find_bboxs(green_mask)
+            
+            # 绘制检测区域（如果使用区域检测）
+            if use_region and region_points is not None:
+                # 绘制区域边界
+                points = np.array(region_points, dtype=np.int32)
+                cv2.polylines(canvas, [points], True, (255, 255, 255), 2)
+                # 添加区域标签
+                cv2.putText(canvas, 'Detection Region', 
+                        (region_points[0][0], region_points[0][1]-10), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            
+            #在图像上绘制结果
+            #红色block边框显示
+            for red_block in red_blocks:
+                x1,y1,x2,y2= red_block
+                cv2.rectangle(canvas,(x1,y1),(x2,y2),(0,0,255),5)
+                # 添加标签
+                cv2.putText(canvas, 'Red', (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
+
+            #蓝色block边框显示
+            for blue_block in blue_blocks:
+                x1,y1,x2,y2= blue_block
+                cv2.rectangle(canvas,(x1,y1),(x2,y2),(255,0,0),5)
+                # 添加标签
+                cv2.putText(canvas, 'Blue', (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,0,0), 2)
+        
+            #绿色block边框显示
+            for green_block in green_blocks:
+                x1,y1,x2,y2= green_block
+                cv2.rectangle(canvas,(x1,y1),(x2,y2),(0,255,0),5)
+                # 添加标签
+                cv2.putText(canvas, 'Green', (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
+        
             #显示画面
             cv2.imshow('view', canvas)
-            #cv2.imshow('mask', mask)
     
             # 按键检测
             key = cv2.waitKey(30) & 0xFF

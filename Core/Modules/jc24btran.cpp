@@ -219,19 +219,19 @@ bool DataTransceiver::send_ack(uint8_t status) {
 }
 
 // 获取位置数据（安全接口）
-bool DataTransceiver::getPositions(bool positions[4]) {
+bool DataTransceiver::getPositions(bool (&positions)[4]) {
     if (!connected_ || !data_valid_) {
         // 数据无效，清零输出
-        memset(positions, 0, 4);
+        memset(positions, 0, sizeof(positions));
         return false;
     }
-    
+
     // 复制去抖后的稳定位置数据
     positions[0] = positions_[0];
     positions[1] = positions_[1];
     positions[2] = positions_[2];
     positions[3] = positions_[3];
-    
+
     return true;
 }
 
