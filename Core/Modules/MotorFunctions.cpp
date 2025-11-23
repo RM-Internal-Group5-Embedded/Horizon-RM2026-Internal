@@ -16,7 +16,7 @@ MotorFunctions::MotorFunctions(int id, pFDCAN_RxFifo0CallbackTypeDef callback,
     
 
     // Initialize timing/data
-    last_time = HAL_GetTick();
+    last_time = xTaskGetTickCount();
     resetData();
 
     // Note: Filter/callbacks now registered once in canbridge::init
@@ -57,13 +57,13 @@ M3508Functions::M3508Functions(int id,  pFDCAN_RxFifo0CallbackTypeDef callback,
     // Tuned for responsive control while maintaining stability
     RPM_KP = 40.0f;  // Increased from 20.0f for faster response (claw uses 50.0f)
     RPM_KI = 0.01f;  // Increased from 0.05f for better steady-state tracking
-    RPM_KD = 0.7f;   // Increased from 0.5f for better damping
+    RPM_KD = 0.2f;   // Increased from 0.5f for better damping
     MAX_CURRENT = 20000;
 
     if(id>4){
         RPM_KP = 40.0f;
         RPM_KI = 0.1f;
-        RPM_KD = 0.7f;
+        RPM_KD = 0.2f;
         MAX_CURRENT = 10000;
     }
 }
@@ -76,21 +76,21 @@ void MotorFunctions::readMotorFeedback(uint8_t rxData[8]) {
     motor_feedback.rpm = (rxData[2] << 8) | rxData[3];
     motor_feedback.current = (rxData[4] << 8) | rxData[5];
     motor_feedback.temperature = rxData[6];
-    motor_feedback.last_update = HAL_GetTick();
+    motor_feedback.last_update = xTaskGetTickCount();
 }
 
-void MotorFunctions::resetData() {
+void MotorFunctions::resetData() { 
     pid_integral = 0;
     pid_prev_error = 0;
-    last_time = HAL_GetTick();
+    last_time = xTaskGetTickCount();
     prev_angle = 0;
     total_motor_counts = 0;
-    motor_feedback.last_update = HAL_GetTick();  // Initialize to prevent immediate timeout
+    motor_feedback.last_update = xTaskGetTickCount();  // Initialize to prevent immediate timeout
 }
 
 void M3508Functions::readMotorFeedback(uint8_t rxData[8]) {
     int16_t current_angle = (rxData[0] << 8) | rxData[1];
-    int32_t current = HAL_GetTick();
+    int32_t current = xTaskGetTickCount();
     // Handle wrap-around to track total motor rotation
     if(!initialized){
         initialized = true;
@@ -131,7 +131,7 @@ void MotorFunctions::sendCurrent(int16_t current) {
 }
 
 void MotorFunctions::controlLoop(int choice, uint16_t magnitude) {
-    uint32_t current_time = HAL_GetTick();
+    uint32_t current_time = xTaskGetTickCount();
     float dt = (current_time - last_time) / 1000.0f; // Update dt
     if (dt <= 0 || dt > 0.1f) dt = 0.01f; // Clamp
     
@@ -147,7 +147,7 @@ void MotorFunctions::stopLoop(){
 
 
 void MotorFunctions::setRpm(int16_t target_rpm){
-    uint32_t current_time = HAL_GetTick();
+    uint32_t current_time = xTaskGetTickCount();
     float dt = (current_time - last_time) / 1000.0f; // Update dt
     if (dt <= 0 || dt > 0.1f) dt = 0.01f; // Clamp
 
@@ -178,7 +178,7 @@ int16_t MotorFunctions::setRpmPID(int16_t target_rpm, float dt, bool send){
 }
 
 void MotorFunctions::setAngle(float target_angle){
-    uint32_t current_time = HAL_GetTick();
+    uint32_t current_time = xTaskGetTickCount();
     float dt = (current_time - last_time) / 1000.0f; // Update dt
     if (dt <= 0 || dt > 0.1f) dt = 0.01f; // Clamp
 
@@ -240,7 +240,7 @@ DMJ4310Functions::DMJ4310Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callbac
     RPM_KI = 0.0f;    // Low integral to prevent windup
     RPM_KD = 1.0f;     // Moderate derivative
     MAX_CURRENT = 10000;  // Conservative current limit
-}
+} 
 
 void DMJ4310Functions::resetData() {
     // Call base class resetData() first
@@ -253,7 +253,7 @@ void DMJ4310Functions::resetData() {
 }
 
 void DMJ4310Functions::readMotorFeedback(uint8_t rxData[8]) {
-    uint32_t current = HAL_GetTick();
+    uint32_t current = xTaskGetTickCount();
     motor_feedback.last_update = current;
     
     // Extract motor ID and error code from D[0]
@@ -448,7 +448,7 @@ GM6020Functions::GM6020Functions(int id, pFDCAN_RxFifo0CallbackTypeDef callback,
 
 void GM6020Functions::readMotorFeedback(uint8_t rxData[8]) {
     int16_t current_angle = (rxData[0] << 8) | rxData[1];
-    int32_t current = HAL_GetTick();
+    int32_t current = xTaskGetTickCount();
     
     // On first feedback, initialize prev_angle to avoid offset
     if(!initialized){

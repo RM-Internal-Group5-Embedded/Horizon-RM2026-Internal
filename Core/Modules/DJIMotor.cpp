@@ -1,6 +1,7 @@
 #include "DJIMotor.hpp"
 #include <cstring>
 #include <cstdio>
+#include "MotorFunctions.hpp"
 
 // Make sure these are declared as extern
 extern FDCAN_HandleTypeDef hfdcan1;
@@ -50,12 +51,22 @@ FDCAN_FilterTypeDef getFilter(uint16_t filterID2, uint16_t filterID1) {
     
     filterConfig.IdType = FDCAN_STANDARD_ID;
     filterConfig.FilterIndex = 0;
-    filterConfig.FilterType = FDCAN_FILTER_RANGE;  // Changed to range mode
+    
+    // Use DUAL mode for single ID (when filterID1 == filterID2), RANGE mode for ID ranges
+    if (filterID1 == filterID2) {
+        // Single ID: Use DUAL mode (matches FilterID1 OR FilterID2, both set to same value)
+        filterConfig.FilterType = FDCAN_FILTER_DUAL;
+    } else {
+        // ID range: Use RANGE mode (matches IDs from FilterID1 to FilterID2)
+        filterConfig.FilterType = FDCAN_FILTER_RANGE;
+    }
+    
     filterConfig.FilterConfig = FDCAN_FILTER_TO_RXFIFO0;
     // For GM6020: We want to receive 0x205-0x208
     // For M3508: We want to receive 0x201-0x204
-    filterConfig.FilterID1 = filterID1;  // Start ID (no shift needed)
-    filterConfig.FilterID2 = filterID2;  // End ID (no shift needed)
+    // For DMJ4310: We want to receive 0x300 (single ID, uses DUAL mode)
+    filterConfig.FilterID1 = filterID1;  // Start ID or first ID (no shift needed)
+    filterConfig.FilterID2 = filterID2;  // End ID or second ID (no shift needed)
 
     
     
@@ -183,7 +194,7 @@ void send(const FDCAN_TxHeaderTypeDef *header, const uint8_t data[8]) {
     static uint8_t messages_this_ms = 0;
     static uint8_t er_messages_this_ms = 0;  // Track ER task messages (0x200)
     static uint8_t claw_messages_this_ms = 0;  // Track Claw task messages (all others)
-    uint32_t current_ms = HAL_GetTick();
+    uint32_t current_ms = xTaskGetTickCount();
     
     // Reset counters if we're in a new millisecond
     if (current_ms != last_ms) {
@@ -198,9 +209,9 @@ void send(const FDCAN_TxHeaderTypeDef *header, const uint8_t data[8]) {
     bool is_er_message = (header->Identifier == 0x200);
     
     // Enforce 8 messages/ms limit (safety limit for bursts/initialization)
-    if (messages_this_ms >= 4) {
-        return;  // Rate limit exceeded - skip this message
-    }
+    // if (messages_this_ms >= 4) {
+    //     return;  // Rate limit exceeded - skip this message
+    // }
     
     // Fairness: Reserve slots to ensure both tasks can send
     // ER needs: 1 slot (0x200)

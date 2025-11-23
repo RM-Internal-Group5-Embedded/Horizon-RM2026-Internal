@@ -123,7 +123,7 @@ namespace TaskHelpers {
   
   // Check chassis motor timeouts (optimized with early exit)
   inline bool checkChassisMotorTimeout(uint32_t current_time) {
-    const uint32_t timeout_ms = 100;
+    const uint32_t timeout_ms = 500;
     if (motor_l_f_p && (current_time - motor_l_f_p->motor_feedback.last_update > timeout_ms)) return true;
     if (motor_r_f_p && (current_time - motor_r_f_p->motor_feedback.last_update > timeout_ms)) return true;
     if (motor_l_b_p && (current_time - motor_l_b_p->motor_feedback.last_update > timeout_ms)) return true;
@@ -133,7 +133,7 @@ namespace TaskHelpers {
   
   // Check claw motor timeouts (optimized with early exit)
   inline bool checkClawMotorTimeout(uint32_t current_time) {
-    const uint32_t timeout_ms = 100;
+    const uint32_t timeout_ms = 500;
     if (gm6020_motor_p && (current_time - gm6020_motor_p->motor_feedback.last_update > timeout_ms)) return true;
     if (s_m3508_claw_p && (current_time - s_m3508_claw_p->motor_feedback.last_update > timeout_ms)) return true;
     if (dmj4310_motor_p && (current_time - dmj4310_motor_p->motor_feedback.last_update > timeout_ms)) return true;
@@ -153,14 +153,11 @@ extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxF
   const uint8_t MAX_MESSAGES_PER_CALLBACK = 3;  // Process up to 7 messages (one per motor) per callback
   
   // Process messages in batches to avoid spending too much time in interrupt context
-  while (messages_processed < MAX_MESSAGES_PER_CALLBACK) {
-    if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxHeader, rxData) != HAL_OK) {
-      // No more messages in FIFO - exit loop
-      break;
-    }
+  
+    if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK) {
+      
     
     uint16_t id = (uint16_t)rxHeader.Identifier;
-    messages_processed++;
     
     // Store CAN ID in history buffer (circular buffer)
     can_id_history.ids[can_id_history.write_index] = id;
@@ -202,7 +199,7 @@ extern "C" void FDCAN1_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxF
       default:
         break; // Unhandled CAN ID
     }
-  }
+}
   
   // If we processed the maximum, there might be more messages - callback will be triggered again
   // This ensures we don't spend too much time in interrupt context while still processing all messages
@@ -217,7 +214,7 @@ extern "C" void FDCAN1_ErrorStatusCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t
     // Recovery will be handled by task context (non-blocking)
     HAL_FDCAN_Stop(hfdcan);
     can_bus_off_recovery_needed = true;
-    can_bus_off_recovery_time = HAL_GetTick();
+    can_bus_off_recovery_time = xTaskGetTickCount();
   }
 }
 
@@ -244,7 +241,7 @@ void updateERTask(void *pvPara) {
   
   while (true) {
     // OPTIMIZATION: Cache HAL_GetTick() result to avoid multiple calls
-    uint32_t current_time = HAL_GetTick();
+    uint32_t current_time = xTaskGetTickCount();
     
     // Shared CAN recovery and monitoring (optimized helper functions)
     TaskHelpers::checkCANRecovery(current_time);
@@ -282,24 +279,24 @@ void updateClawTask(void *pvPara) {
     vTaskDelay(pdMS_TO_TICKS(100)); // Wait for motor to enable (LED should turn green)
     
     // Set current DMJ4310 position as zero reference
-    dmj4310_motor_p->setZeroPosition();
-    vTaskDelay(pdMS_TO_TICKS(50));
+    //dmj4310_motor_p->setZeroPosition();
+    //vTaskDelay(pdMS_TO_TICKS(50));
     
     
     // Send initial zero commands to GM6020 and M3508 claw motors
     gm6020_motor_p->sendCurrent(0);
     s_m3508_claw_p->sendCurrent(0);
     
-    motors_initialized = true;
+    motors_initialized = true; 
   }
 
   while (true) {
     // OPTIMIZATION: Cache HAL_GetTick() result to avoid multiple calls
-    uint32_t current_time = HAL_GetTick();
+    uint32_t current_time = xTaskGetTickCount();
     
     // Shared CAN recovery and monitoring (optimized helper functions)
-    TaskHelpers::checkCANRecovery(current_time);
-    TaskHelpers::monitorCANErrors(current_time);
+    //TaskHelpers::checkCANRecovery(current_time);
+    //TaskHelpers::monitorCANErrors(current_time);
     
     // ALWAYS process UART data and update state machine, regardless of timeout
     // Timeout only affects safety commands, not state machine logic
@@ -307,32 +304,11 @@ void updateClawTask(void *pvPara) {
     uartdriver::ReceivedValue received_data = g_uart.getReceivedValue();
     er_claw_control_p->switchState(received_data);
     
-    //Check for claw motor timeouts (optimized helper function with early exit)
-    if (TaskHelpers::checkClawMotorTimeout(current_time)) {
-      // Safety: Send zero commands if any motor timed out (override normal commands)
-      // BUT: Still send keep-alive to DMJ4310 with proper Kp/Kd to keep it enabled
-      if (gm6020_motor_p) gm6020_motor_p->sendCurrent(0);
-      if (s_m3508_claw_p) s_m3508_claw_p->sendCurrent(0);
-      // DMJ4310: Send keep-alive with proper gains (not all zeros) to maintain enabled state
-      // Also send enable command if feedback is lost
-      if (dmj4310_motor_p) {
-        // If no feedback for >50ms, send enable command first
-        if (current_time - dmj4310_motor_p->motor_feedback.last_update > 50) {
-          dmj4310_motor_p->enableMotor();
-        }
-        // Always send keep-alive MIT command
-        dmj4310_motor_p->sendMITCommand(0.0f, 0.0f, 
-                                        dmj4310_motor_p->RPM_KP, 
-                                        dmj4310_motor_p->RPM_KD, 
-                                        0.0f);
-      }
-    } else {
-      //Normal operation: Update state machine and send normal commands
-      
-      er_claw_control_p->update(received_data);
-    }
+     
+    er_claw_control_p->update(received_data);
+     
     
-    vTaskDelay(pdMS_TO_TICKS(13));  // 100Hz update rate  
+    vTaskDelay(pdMS_TO_TICKS(13.1));  // 100Hz update rate  
   }
 }
 
@@ -421,7 +397,9 @@ void startUserTasks() {
   motor_r_b_p = &s_motor_r_b;
 
   // Initialize claw motors
-  // DMJ4310: CAN ID = 1, Master ID = 768 (0x300), MIT mode
+  // DMJ4310: CAN ID = 1 (for receiving commands), Master ID = 768 (0x300 for feedback), MIT mode
+  // NOTE: The motor's CAN ID must be configured to 1 via debug assistant
+  // The filter parameters (0x205, 0x20B) are not used - actual filter is configured below
   static DMJ4310Functions s_dmj4310_base(1, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x205, 0x20B);
   static GM6020Functions  s_gm6020_small(7, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x205, 0x20B);
   static M3508Functions   s_m3508_claw  (5, FDCAN1_RxFifo0Callback, FDCAN1_ErrorStatusCallback, 0x205, 0x20B);
@@ -449,6 +427,7 @@ void startUserTasks() {
   if (HAL_FDCAN_ConfigFilter(&hfdcan1, &filter) != HAL_OK) {
       Error_Handler();
   }
+  // DMJ4310 feedback filter: Master ID = 0x300 (uses DUAL mode for single ID)
   FDCAN_FilterTypeDef dmj_filter = Modules::DJIMotors::getFilter(0x300, 0x300);
   dmj_filter.FilterIndex = 1;
   if (HAL_FDCAN_ConfigFilter(&hfdcan1, &dmj_filter) != HAL_OK) {

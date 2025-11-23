@@ -178,7 +178,7 @@ void ERStatusControl::traversal( uint16_t joystick_r_x, uint16_t joystick_r_y,
     back_left_rpm   = static_cast<int16_t>(ry - rx + lx);
     back_right_rpm  = -static_cast<int16_t>(ry + rx - lx);
 
-    uint32_t current_time = HAL_GetTick();
+    uint32_t current_time = xTaskGetTickCount();
     static uint32_t last_time = 0;
     float dt;
     if (last_time == 0 || (current_time - last_time) > 100) {
@@ -348,9 +348,9 @@ void ERClawControl::idleMode() {
     if (claw_motors.base_claw) {
         // Send periodic enable command to keep motor enabled (required for feedback)
         static uint32_t last_enable_time = 0;
-        uint32_t current_time = HAL_GetTick();
+        uint32_t current_time = xTaskGetTickCount();
         // Send enable command every 100ms to keep motor enabled
-        if (current_time - last_enable_time >= 100) {
+        if (current_time - last_enable_time >= 200) {
             claw_motors.base_claw->enableMotor();
             last_enable_time = current_time;
         }
@@ -373,10 +373,11 @@ void ERClawControl::idleMode() {
                 motor_disabled = false;
                 recovery_in_progress = false;
             }
-        } else {
-            // No error - reset recovery state
-            recovery_in_progress = false;
-            motor_disabled = false;
+        } else { 
+            claw_motors.base_claw->sendMITCommand(0.0f, 0.0f,
+                                claw_motors.base_claw->RPM_KP,
+                                claw_motors.base_claw->RPM_KD,
+                                claw_motors.base_claw->RPM_KI);
         }
     }
     // Send zero to both GM6020 and M3508 claw motors
@@ -398,13 +399,19 @@ void ERClawControl::fullManualClaw(const uartdriver::ReceivedValue& received_dat
     static uint32_t last_time = 0;
     float dt = computeDeltaTime(last_time);
     int16_t gm6020_current = 0;
-    float gm6020degree = 90.0f;
-    if(!clasp) gm6020degree = 180*(static_cast<float>(received_data.channel_6) - CENTER) / SBUS_SPAN; 
+    float gm6020degree = 135.0f;
+    if(!clasp) gm6020degree = 220*(static_cast<float>(received_data.channel_6) - CENTER) / SBUS_SPAN; 
+    
     
     float m3508_angle = 360*(static_cast<float>(received_data.channel_3) - CENTER) / SBUS_SPAN;
-    
+    if(received_data.channel_3 > 1740){
+        m3508_angle = 360*(static_cast<float>(1740) - CENTER) / SBUS_SPAN;
+    } else if(received_data.channel_3 < 700){
+        m3508_angle = 360*(static_cast<float>(700) - CENTER) / SBUS_SPAN;
+    }
+//
     float motor_position = 4;
-    if(!down) motor_position = 8*(static_cast<float>(received_data.channel_5) - CENTER) / SBUS_SPAN;
+    if(!down) motor_position = 9*(static_cast<float>(received_data.channel_5) - CENTER) / SBUS_SPAN;
     
     sendClawCurrent(gm6020degree, motor_position, m3508_angle, dt);
 }
@@ -428,27 +435,10 @@ void ERClawControl::sendClawCurrent(float gm6020degree, float motor_position, fl
         turn = false;
         return;
     }
-    turn = true;;
+    turn = true;
     // Motor 2: DMJ4310 base claw
     if (claw_motors.base_claw) {
-        // Ensure motor is enabled before sending commands
-        static uint32_t last_enable_time = 0;
-        static uint32_t last_call_time = 0;
-        uint32_t current_time = HAL_GetTick();
-       
-        // Enable immediately on first call after idle (gap > 200ms indicates transition from idle)
-        // Or enable periodically (every 100ms) to keep motor enabled
-        if (last_call_time == 0 || (current_time - last_call_time > 200) || (current_time - last_enable_time >= 100)) {
-            // Clear error codes before enabling to ensure motor can enable
-            if (claw_motors.base_claw->hasError()) {
-                claw_motors.base_claw->error_code = 0;
-                claw_motors.base_claw->rx_motor_id = 0;
-            }
-            claw_motors.base_claw->enableMotor();
-            last_enable_time = current_time;
-        }
-        last_call_time = current_time;
-       
+        claw_motors.base_claw->enableMotor();
         // MIT command: always sends command each cycle
         claw_motors.base_claw->sendMITCommand(motor_position, 0.01f,
                                 claw_motors.base_claw->RPM_KP,
@@ -461,7 +451,7 @@ void ERClawControl::sendClawCurrent(float gm6020degree, float motor_position, fl
 void ERClawControl::resetMoveSequence(MoveSequence &target){
     target.active = false;
     target.starttime = 0;
-    target.currenttime = 0;
+    target.currenttime = 0; 
     target.m3508_input = 0;
     target.dmj_input = 0;
     target.gm6020_input = 0;
@@ -564,7 +554,7 @@ void ERClawControl::moveMotor_dmj(  float starting_degree,
         // Ensure motor is enabled before sending commands
         static uint32_t last_enable_time = 0;
         static uint32_t last_call_time = 0;
-        uint32_t current_time = HAL_GetTick();
+        uint32_t current_time = xTaskGetTickCount();
        
         // Enable immediately on first call after idle (gap > 200ms indicates transition from idle)
         // Or enable periodically (every 100ms) to keep motor enabled
@@ -621,7 +611,7 @@ void ERClawControl::holdMotor_dmj(float target, float dt){
         // Ensure motor is enabled before sending commands
         static uint32_t last_enable_time = 0;
         static uint32_t last_call_time = 0;
-        uint32_t current_time = HAL_GetTick();
+        uint32_t current_time = xTaskGetTickCount();
        
         // Enable immediately on first call after idle (gap > 200ms indicates transition from idle)
         // Or enable periodically (every 100ms) to keep motor enabled
@@ -927,7 +917,7 @@ void ERClawControl::upMode(const uartdriver::ReceivedValue& received_data) {
     if (claw_motors.base_claw) {
         // Ensure motor is enabled before sending commands
         static uint32_t last_enable_time = 0;
-        uint32_t current_time = HAL_GetTick();
+        uint32_t current_time = xTaskGetTickCount();
         // Send enable command periodically (every 100ms) to keep motor enabled
         if (current_time - last_enable_time >= 100) {
             claw_motors.base_claw->enableMotor();
@@ -958,15 +948,6 @@ void ERClawControl::downMode(const uartdriver::ReceivedValue& received_data) {
 
     // DMJ4310 base claw control - RELEASE MODE: go to 0° (top shaft angle)
     if (claw_motors.base_claw) {
-        // Ensure motor is enabled before sending commands
-        static uint32_t last_enable_time = 0;
-        uint32_t current_time = HAL_GetTick();
-        // Send enable command periodically (every 100ms) to keep motor enabled
-        if (current_time - last_enable_time >= 100) {
-            claw_motors.base_claw->enableMotor();
-            last_enable_time = current_time;
-        }
-        // MIT command: position=12.566 rad, velocity=0, kp=50, kd=2, torque=0
         claw_motors.base_claw->sendMITCommand(motor_position, 0.01f, 
                                 claw_motors.base_claw->RPM_KP, 
                                 claw_motors.base_claw->RPM_KD, 
